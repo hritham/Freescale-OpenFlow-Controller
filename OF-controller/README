@@ -1,0 +1,79 @@
+All the documentation related files are located at OF-controller/doc
+
+Requirements
+-------------
+1. libncurses
+   libedit
+   liburcu
+   libcrypto
+   libfutex
+
+2. All of the above libraries can be downloaded from opensource and can be linked  as shared libraries.
+   All of these are copied to of-controller/src/ofproto/build/lib-p4080, of-controller/src/ofproto/build/lib-x86 directory as a reference.
+
+3. All the opensource source code is placed at OF-controller/opensrc directory.
+
+4. While compilation you may observe issues with ant-tool. Install the ant-tool on the development machine.
+   apt-get install ant
+
+5. Check softlink which java ->/usr/bin/java --> /etc/alternatives/java --> /usr/lib/jvm/java-6-sun/bin/java
+   if not install sun java6 for ubuntu 12.04 from the Internet, and update the java soft-link as mentioned above.
+
+   For 64 bit machine  apt-get install openjdk-7-jdk
+
+Compilation Procedure 
+-----------------------
+
+1. Update JAVA_HOME,PATH,CLASSPATH in the respective shell script mentioned below.
+
+2. For P4080, Upate the SDK_INSTALL_PATH in p4080-sdk-1.4-env.sh This source has used QorIQ SDK v1.4 
+   Browse through the website for the SDK1.4 http://linux.freescale.net/labDownload2/viewDownloads.php
+   source p4080-sdk-1.4-env.sh
+
+3. For X86 32 bit, run source x86-env.sh
+       X86 64 bit, run source x86-64bit-env.sh
+
+4. make controller
+
+Installation
+-------------
+1. make controllerimage 
+   which will create ondirector-image.tar.gz, copy ondirector-image.tar.gz on to the target machine (Not to / directory).
+
+2. untar ondirector-image.tar.gz.
+
+3. cd ondirector-install
+   sh ondirector-install.sh
+
+4. cd /ondirector
+   sh ondirector-start.sh 
+
+NOTE: controller is running on 6653 by default, user can change the port number to his desired one by modifying the line as follows in ondirector-start.sh and restart the controller
+./controller 0 8 -f &  ==> ./controller 0 8 6633 -f &
+
+Binary files
+-------------
+1. All the binary files are placed in /ondirector/bin directory
+   cd /ondirector/bin
+    controller  ofcli  ofucmd  ofldsvd
+
+2. controller, ofldsvd  and ofucmd are started as part of the start script.
+
+3. To configure controller through CLI, run ofcli.
+   Refer ofp-configure.txt file in OF-controller/doc directory.
+
+Application Shared Libraries
+-----------------------------
+1. All application libraries are placed in /ondirector/lib/apps
+   cd /ondirector/lib/apps
+   s01-l3ext-utils.so s02-sample-app.so
+
+2. s02-sample-app.so is a sample application library which is capable of handling the session-table, forwarding-table and arp-table entries.
+
+3. For Sample application configuration, refer ofp-sampleapp.txt file in OF-controller/doc directory. 
+
+LDSV - Default configuration
+-----------------------------
+1. LDSV will load the default configuration from /ondirector/conf/ofpsdn directory, when the controller is started initially.
+2. When the user issued save command in CLI, the configuration is updated and stored in the /ondirector/conf/<VERSION_NUM>/ofpsdn.
+3. The updated configuration will be loaded when the controller is restarted.
