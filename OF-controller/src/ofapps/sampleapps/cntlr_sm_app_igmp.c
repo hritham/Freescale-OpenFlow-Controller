@@ -1100,13 +1100,6 @@ int32_t sm_app_igmp_process_membership_report(uint64_t dp_handle,
 				break;
 			}
 
-			if (of_group_frame_and_send_message_request(dp_handle,
-								group_id, ADD_GROUP) != OF_SUCCESS)
-			{
-				OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:sending groupmod add msg failed");
-				status = OF_FAILURE;
-				break;
-			}
 		}
 		else	{
                               mcast_portinfo_t *mc_port_info = NULL;
