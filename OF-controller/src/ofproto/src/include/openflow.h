@@ -1209,39 +1209,138 @@ enum ofp_group_mod_command {
     OFPGC_ADD    = 0,       /* New group. */
     OFPGC_MODIFY = 1,       /* Modify all matching groups. */
     OFPGC_DELETE = 2,       /* Delete all matching groups. */
+    OFPGC_INSERT_BUCKET = 3,/* Insert action buckets to the already available
+                               list of action buckets in a matching group */
+    OFPGC_REMOVE_BUCKET = 4,/* Remove all action buckets or any specific action
+                               bucket from matching group */
+
 };
+
+/* Group bucket property types. */
+enum ofp_group_bucket_prop_type {
+    OFPGBPT_WEIGHT = 0, /* Select groups only. */
+    OFPGBPT_WATCH_PORT = 1, /* Fast failover groups only. */
+    OFPGBPT_WATCH_GROUP = 2, /* Fast failover groups only. */
+    OFPGBPT_EXPERIMENTER = 0xFFFF, /* Experimenter defined. */
+};
+
+/* Common header for all group bucket properties. */
+    struct ofp_group_bucket_prop_header {
+    uint16_t type; /* One of OFPGBPT_*. */
+    uint16_t length; /* Length in bytes of this property. */
+};
+OFP_ASSERT(sizeof(struct ofp_group_bucket_prop_header) == 4);
+
+/* Group bucket weight property, for select groups only. */
+    struct ofp_group_bucket_prop_weight {
+    uint16_t type; /* OFPGBPT_WEIGHT. */
+    uint16_t length; /* 8. */
+    uint16_t weight; /* Relative weight of bucket. */
+    uint8_t pad[2]; /* Pad to 64 bits. */
+};
+OFP_ASSERT(sizeof(struct ofp_group_bucket_prop_weight) == 8);
+
+/* Group bucket watch port or watch group property, for fast failover groups
+* only. */
+struct ofp_group_bucket_prop_watch {
+   uint16_t type; /* OFPGBPT_WATCH_PORT or OFPGBPT_WATCH_GROUP. */
+   uint16_t length; /* 8. */
+   uint32_t watch; /* The port or the group. */
+};
+OFP_ASSERT(sizeof(struct ofp_group_bucket_prop_watch) == 8);
+
+/* Experimenter group bucket property */
+struct ofp_group_bucket_prop_experimenter {
+   uint16_t type; /* OFPGBPT_EXPERIMENTER. */
+   uint16_t length; /* Length in bytes of this property. */
+   uint32_t experimenter; /* Experimenter ID which takes the same
+                             form as in struct
+                             ofp_experimenter_header. */
+   uint32_t exp_type; /* Experimenter defined. */
+   /* Followed by:
+   * - Exactly (length - 12) bytes containing the experimenter data, then
+   * - Exactly (length + 7)/8*8 - (length) (between 0 and 7)
+   * bytes of all-zero bytes */
+   uint32_t experimenter_data[0];
+};
+OFP_ASSERT(sizeof(struct ofp_group_bucket_prop_experimenter) == 12);
 
 /* Bucket for use in groups. */
 struct ofp_bucket {
-    uint16_t len;                   /* Length the bucket in bytes, including
-                                       this header and any padding to make it
-                                       64-bit aligned. */
-    uint16_t weight;                /* Relative weight of bucket.  Only
-                                       defined for select groups. */
-    uint32_t watch_port;            /* Port whose state affects whether this
-                                       bucket is live.  Only required for fast
-                                       failover groups. */
-    uint32_t watch_group;           /* Group whose state affects whether this
-                                       bucket is live.  Only required for fast
-                                       failover groups. */
-    uint8_t pad[4];
-    struct ofp_action_header actions[0]; /* The action length is inferred
-                                           from the length field in the
-                                           header. */
+        uint16_t len; /* Length the bucket in bytes, including this header and any 
+                         padding to make it 64-bit aligned. */
+        uint16_t action_list_len; /* Length of all actions in bytes. */
+        uint32_t bucket_id; /* Bucket Id used to identify bucket*/
+        /* Followed by:
+         * - Exactly action_list_len bytes containing an array of
+         * struct ofp_action_
+         * - Zero or more bytes of group bucket properties to fill out the
+         * overall length in header.length. */
+        struct ofp_action_header actions[0]; /* The length of the action array is
+                                                action_list_len bytes. */
+        //struct ofp_group_bucket_prop_header properties[0];
 };
-OFP_ASSERT(sizeof(struct ofp_bucket) == 16);
+OFP_ASSERT(sizeof(struct ofp_bucket) == 8);
+
+/* Bucket Id can be any value between 0 and OFPG_BUCKET_MAX */
+enum ofp_group_bucket {
+        OFPG_BUCKET_MAX = 0xffffff00, /* Last usable bucket ID */
+        OFPG_BUCKET_FIRST = 0xfffffffd, /* First bucket ID in the list of action
+                                           buckets of a group. This is applicable
+                                           for OFPGC_INSERT_BUCKET and
+                                           OFPGC_REMOVE_BUCKET commands */
+        OFPG_BUCKET_LAST = 0xfffffffe, /* Last bucket ID in the list of action
+                                          buckets of a group. This is applicable
+                                          for OFPGC_INSERT_BUCKET and
+                                          OFPGC_REMOVE_BUCKET commands */
+        OFPG_BUCKET_ALL = 0xffffffff /* All action buckets in a group,
+                                        This is applicable for
+                                        only OFPGC_REMOVE_BUCKET command */
+};
+
+/* Group property types. */
+enum ofp_group_prop_type {
+       OFPGPT_EXPERIMENTER = 0xFFFF, /* Experimenter defined. */
+};
+
+/* Common header for all group properties. */
+       struct ofp_group_prop_header {
+       uint16_t type; /* One of OFPGPT_*. */
+       uint16_t length; /* Length in bytes of this property. */
+};
+OFP_ASSERT(sizeof(struct ofp_group_prop_header) == 4);
+
+/* Experimenter group property */
+struct ofp_group_prop_experimenter {
+       uint16_t type; /* OFPGPT_EXPERIMENTER. */
+       uint16_t length; /* Length in bytes of this property. */
+       uint32_t experimenter; /* Experimenter ID which takes the same
+                                 form as in struct ofp_experimenter_header. */
+       uint32_t exp_type; /* Experimenter defined. */
+       /* Followed by:
+        * - Exactly (length - 12) bytes containing the experimenter data, then
+        * - Exactly (length + 7)/8*8 - (length) (between 0 and 7)
+        * bytes of all-zero bytes */
+uint32_t experimenter_data[0];
+};
+OFP_ASSERT(sizeof(struct ofp_group_prop_experimenter) == 12);
 
 /* Group setup and teardown (controller -> datapath). */
 struct ofp_group_mod {
-    struct ofp_header header;
-    uint16_t command;             /* One of OFPGC_*. */
-    uint8_t type;                 /* One of OFPGT_*. */
-    uint8_t pad;                  /* Pad to 64 bits. */
-    uint32_t group_id;            /* Group identifier. */
-    struct ofp_bucket buckets[0]; /* The length of the bucket array is inferred
-                                     from the length field in the header. */
+        struct ofp_header header;
+        uint16_t command; /* One of OFPGC_*. */
+        uint8_t type; /* One of OFPGT_*. */
+        uint8_t pad; /* Pad to 64 bits. */
+        uint32_t group_id; /* Group identifier. */
+        uint16_t bucket_list_len; /* Length of action buckets data. */
+        uint8_t pad1[2]; /* Pad to 64 bits. */
+        uint32_t command_bucket_id; /* Bucket Id used as part of
+                                       OFPGC_INSERT_BUCKET and OFPGC_REMOVE_BUCKET
+                                       commands execution.*/
+        struct ofp_bucket buckets[0]; /* The length of the bucket array is
+                                         bucket_list_len bytes. */
 };
-OFP_ASSERT(sizeof(struct ofp_group_mod) == 16);
+OFP_ASSERT (sizeof(struct ofp_group_mod) == 24);
 
 /* Group types.  Values in the range [128, 255] are reserved for experimental
  * use. */
@@ -1258,15 +1357,17 @@ enum ofp_group_type {
 /* Send packet (controller -> datapath). */
 struct ofp_packet_out {
     struct ofp_header header;
-    uint32_t buffer_id;           /* ID assigned by datapath (OFP_NO_BUFFER
-                                     if none). */
-    uint32_t in_port;             /* Packet's input port or OFPP_CONTROLLER. */
-    uint16_t actions_len;         /* Size of action array in bytes. */
-    uint8_t pad[6];
-    struct ofp_action_header actions[0]; /* Action list. */
-    /* uint8_t data[0]; */        /* Packet data.  The length is inferred
-                                     from the length field in the header.
-                                     (Only meaningful if buffer_id == -1.) */
+    uint32_t buffer_id; /* ID assigned by datapath (OFP_NO_BUFFER) if none). */
+    uint16_t actions_len; /* Size of action array in bytes. */
+    uint8_t pad[2]; /* Align to 64 bits. */
+    struct ofp_match match; /* Packet pipeline fields. Variable size. */
+    /* The variable size and padded match is followed by the list of actions. */
+    struct ofp_action_header actions[0];/* Action list - 0 or more. */
+
+    /* The variable size action list is optionally followed by packet data.
+     * This data is only present and meaningful if buffer_id == -1. */
+    /* uint8_t data[0]; */ /* Packet data. The length is inferred
+    from the length field in the header. */
 };
 OFP_ASSERT(sizeof(struct ofp_packet_out) == 24);
 

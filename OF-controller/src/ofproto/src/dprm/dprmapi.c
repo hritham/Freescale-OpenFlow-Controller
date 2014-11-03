@@ -3061,6 +3061,7 @@ int32_t dprm_add_port_to_datapath(uint64_t datapath_handle,
 
   name = dprm_port_p->port_name;
 
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "Port Name = %s Number = %d\n",name,dprm_port_p->port_id);
 #if 0
   if(strlen(name) < 8)
   {
@@ -3263,8 +3264,12 @@ int32_t dprm_get_port_handle(uint64_t dp_handle,char* port_name_p,uint64_t* port
   offset = PORTNODE_PORTTBL_OFFSET;
   MCHASH_BUCKET_SCAN(datapath_info_p->dprm_dpnode_porttable_p,hashkey,port_entry_p,struct dprm_port_entry *,offset)
   {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,
+     "%s: port name  =%s\r\n",__FUNCTION__,port_entry_p->port_name);
     if(!strcmp(port_entry_p->port_name,port_name_p))
     {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,
+     "%s: port name  =%s FOUND \r\n",__FUNCTION__,port_name_p);
       *port_handle_p = port_entry_p->magic;
       *port_handle_p = ((*port_handle_p <<32) | (port_entry_p->index));
       return DPRM_SUCCESS;

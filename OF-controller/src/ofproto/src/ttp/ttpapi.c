@@ -205,6 +205,7 @@ int32_t get_ttp_node_index(char *ttp_name_p, int32_t *ttp_index_p)
   {
     if(ttp_info_g[ttp_index].is_ttp_cfg == TRUE)
     {
+         OF_LOG_MSG(OF_LOG_TTP, OF_LOG_DEBUG, "ttp_name :%s",ttp_info_g[ttp_index].ttp_name);
       if(!strcmp(ttp_name_p, ttp_info_g[ttp_index].ttp_name))
       {
          OF_LOG_MSG(OF_LOG_TTP, OF_LOG_DEBUG, "ttp_name index:%d",ttp_index);

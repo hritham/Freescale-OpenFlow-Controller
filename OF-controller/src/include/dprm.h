@@ -2631,4 +2631,7 @@ struct ipsec_resource_runtime_info {
 };
 #endif /* OF_XML_SUPPORT */
 
+int32_t dprm_get_switch_data_ip(char* name_p, uint32_t* switch_data_ip_p);
+int32_t get_swname_by_dphandle(uint64_t datapath_handle,char** sw_name_p_p);
+
 #endif /*__DPRM_H*/

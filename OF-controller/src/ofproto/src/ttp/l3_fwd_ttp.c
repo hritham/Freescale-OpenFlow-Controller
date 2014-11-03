@@ -129,6 +129,8 @@ int32_t l3_fwd_ttp_init()
 	  goto SAMPLE_L3_FWD_TTP_INIT_EXIT;
         }
 
+#if 0
+     Rajesh dropping one column 
         ret_val = add_match_field_to_table(&(ttp_table_node_p->match_fields_list),
 				    OXM_OF_IPV4_DST, 
 				    FALSE, 
@@ -139,6 +141,7 @@ int32_t l3_fwd_ttp_init()
 	  ret_val = CNTLR_TTP_FAILURE;
 	  goto SAMPLE_L3_FWD_TTP_INIT_EXIT;
         }
+#endif
         ret_val = add_match_field_to_table(&(ttp_table_node_p->match_fields_list),
 				    OXM_OF_IP_PROTO, 
 				    FALSE, 

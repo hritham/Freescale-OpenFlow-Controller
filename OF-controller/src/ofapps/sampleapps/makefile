@@ -14,6 +14,7 @@ OBJS =  $(BIN_DIR)/cntlr_sample_app.o\
         $(BIN_DIR)/cntlr_sm_arp_app.o\
         $(BIN_DIR)/sample_app_init.o\
 	    $(BIN_DIR)/cntlr_sm_app_igmp.o\
+	    $(BIN_DIR)/pktout_pipeline_fields_ext.o\
         $(BIN_DIR)/sample_l2_init.o
 
 $(TARGET_LIB) : $(OBJS)

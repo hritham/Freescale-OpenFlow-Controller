@@ -244,7 +244,7 @@ int32_t of_group_features_getexactrec (struct cm_array_of_iv_pairs * key_iv_pair
 				group_id=of_atoi((char *) mand_iv_pairs->iv_pairs[mand_param_cnt].value_p);
 				CM_CBK_DEBUG_PRINT ("group description id is %d", group_id);
 				break;
-			case CM_DM_GROUPDESC_TYPE_ID:
+			case CM_DM_GROUPDESC_GROUPTYPE_ID:
 				type=ucm_uint8_from_str_ptr((char *) mand_iv_pairs->iv_pairs[mand_param_cnt].value_p);
 				CM_CBK_DEBUG_PRINT ("type is %d", type);
 				if ( type > OFPGT_FF)

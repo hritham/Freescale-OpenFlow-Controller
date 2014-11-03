@@ -568,3 +568,10 @@ int32_t dprm_get_logical_switch_handle(uint64_t switch_handle,
 int32_t dprm_send_port_update_events( struct    dprm_datapath_entry* datapath_info_p,
                struct    dprm_port_entry* dprm_port_p);
 
+void dp_port_notifications_cbk(uint32_t dprm_notification_type,
+                               uint64_t datapath_handle,
+                               struct   dprm_datapath_notification_data ,
+                               void     *callback_arg1,
+                               void     *callback_arg2);
+
+int32_t get_switch_byhandle(uint64_t switch_handle,struct dprm_switch_entry** switch_info_p_p);

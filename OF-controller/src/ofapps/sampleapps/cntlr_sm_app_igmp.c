@@ -47,10 +47,15 @@ extern int32_t
 sm_app_add_missentry_with_goto_table_instruction(uint64_t datapath_handle, 
 						 uint8_t table_id, /* id of the table to which this entry will be added */
 						 uint8_t jump_tableid);
-extern int32_t of_frame_pktout_msg(struct of_msg *msg, uint64_t datapath_handle,
-				uint8_t reply_pkt, uint32_t buffer_id,
-				uint32_t in_port, uint8_t channel_no, void **conn_info_pp);
-
+extern int32_t
+of_frame_pktout_msg(struct of_msg *msg,
+      uint64_t       datapath_handle,
+      uint8_t        reply_pkt,
+      uint32_t       buffer_id,
+      uint8_t        channel_no,
+      void **conn_info_pp
+      );
+ 
 void sm_app_igmp_port_ready_cbk(uint32_t notification_type,
                                      uint64_t datapath_handle,
                                      struct   dprm_datapath_notification_data notification_data,
@@ -62,6 +67,59 @@ void sm_app_igmp_port_ready_cbk(uint32_t notification_type,
 uint16_t entry_index;
 uint16_t mcast_rtentry_priority;
 uint32_t mcast_group_id;
+uint32_t mcast_bucket_id;
+
+
+/***** FUNCTION PROTOTYPES ******/
+static cntlr_app_mcast_rtentry_t* sm_app_mcast_get_free_entry(cntlr_app_mcast_rtentry_t *mcast_rt_table);
+static inline cntlr_app_mcast_rtentry_t*
+sm_app_mcast_get_entry_by_grp_address(cntlr_app_mcast_rtentry_t *mcast_rt_table, uint32_t grp_address);
+
+static inline cntlr_app_mcast_rtentry_t* 
+sm_app_mcast_get_free_entry(cntlr_app_mcast_rtentry_t *mcast_rt_table);
+
+int32_t sm_app_igmp_process_membership_report(uint64_t dp_handle,
+                                              cntlr_app_mcast_rtentry_t *mc_rt_table,
+                                              uint8_t        mcast_routing_table_id,
+                                              uint32_t group_addr, uint32_t in_port);
+int32_t sm_app_igmp_process_leave(uint64_t dp_handle,
+                                  cntlr_app_mcast_rtentry_t *mc_rt_table, 
+                                  uint8_t        mcast_routing_table_id,
+				  uint32_t group_addr, uint32_t in_port);
+int32_t
+of_create_action_bucket_4_mc_traffic(struct of_msg *msg,
+                                     uint32_t group_id,
+                                     uint32_t bucket_id,
+                                     uint32_t port_num,
+                                     uint16_t *bucket_len);
+int32_t
+of_inform_dp_2_add_port_4_mc_traffic(uint64_t datapath_handle,
+                                     uint32_t group_id,
+                                     uint32_t bucket_id,
+                                     uint32_t port_num);
+int32_t
+of_inform_dp_2_create_group_4_mc_traffic(uint64_t datapath_handle,
+                                         uint32_t group_id,
+                                         uint32_t bucket_id,
+                                         uint32_t port_num);
+int32_t
+of_inform_dp_2_add_port_4_mc_group(uint64_t datapath_handle,
+                                   uint32_t group_id,
+                                   uint32_t bucket_id,
+                                   uint32_t port_num);
+
+int32_t
+of_inform_dp_abt_deletion_of_mc_group(uint64_t datapath_handle,
+                                      uint32_t group_id);
+
+
+/*Currently group ID maintained locally, since no unique id module present, once available
+  it should be registered with it. Currently just running sequence number is maintained */
+#define SMP_APP_IGMP_GROUP_ID  ((mcast_group_id == 4095)?1:mcast_group_id++)
+#define SMP_APP_IGMP_BUCKET_ID ((mcast_bucket_id == 4095)?1:mcast_bucket_id++)
+
+#define SMP_APP_IGMP_FLOW_ID ((mcast_rtentry_priority == 0xFFFE)?10:mcast_rtentry_priority++)
+
 
 int32_t	sm_app_igmp_init()
 {
@@ -70,15 +128,77 @@ int32_t	sm_app_igmp_init()
 	entry_index = 0;
 	mcast_rtentry_priority = 10;
 	mcast_group_id = 1;
+	mcast_bucket_id = 1;
 
 	for (dp_index = 0; dp_index < OF_CNTLR_MAX_DATA_PATHS; dp_index++) {
 		for (ii = 0; ii < OF_CNTLR_APP_MAX_MCAST_ROUTE_ENTRIES; ii++) {
-			dp_conf[dp_index].mcast_rt_table[ii].no_of_outports = 0;
+			dp_conf[dp_index].mcast_rt_table[ii].num_of_outports = 0;
 			dp_conf[dp_index].mcast_rt_table[ii].binuse = FALSE;
 		}
 	}
 	return OF_SUCCESS;
 }
+
+static inline cntlr_app_mcast_rtentry_t*
+ sm_app_mcast_get_free_entry(cntlr_app_mcast_rtentry_t *mcast_rt_table)
+{
+	int32_t	index;
+
+	for (index=0; index< OF_CNTLR_APP_MAX_MCAST_ROUTE_ENTRIES; index++) {
+		if (mcast_rt_table[index].binuse == FALSE)
+			return (mcast_rt_table + index);
+	}
+	return NULL;
+}
+
+static inline cntlr_app_mcast_rtentry_t* 
+sm_app_mcast_get_entry_by_grp_address(cntlr_app_mcast_rtentry_t *mcast_rt_table, uint32_t grp_address)
+{
+	int32_t	index;
+
+	for (index=0; index< OF_CNTLR_APP_MAX_MCAST_ROUTE_ENTRIES; index++)	{
+		if ( (mcast_rt_table[index].grp_addr == grp_address) &&
+	             (mcast_rt_table[index].binuse == TRUE))
+		{
+			return (mcast_rt_table + index);
+		}
+	}
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP:%s no entry found with grp-ip=%x",__FUNCTION__,grp_address);
+	return NULL;
+}
+
+
+static inline mcast_portinfo_t*
+ sm_app_mcast_get_free_portentry(cntlr_app_mcast_rtentry_t *mcast_rt_entry)
+{
+	int32_t	index;
+
+	for (index=0; index < OF_CNTLR_APP_MAX_MCAST_OUTPORTS; index++)	{
+		if (mcast_rt_entry->port_info[index].binuse == FALSE)
+			return (mcast_rt_entry->port_info + index);
+	}
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP:%s no free port entry found ",__FUNCTION__);
+	return NULL;
+}
+
+static inline mcast_portinfo_t*
+sm_app_mcast_get_portentry_by_id(cntlr_app_mcast_rtentry_t *mcast_rt_entry,
+                                 uint32_t port_id)
+{
+	int32_t	index;
+
+	for (index=0; index < OF_CNTLR_APP_MAX_MCAST_OUTPORTS; index++)	{
+		if ( (mcast_rt_entry->port_info[index].port_id == port_id) &&
+		     (mcast_rt_entry->port_info[index].binuse == TRUE)    )
+		{
+			return (mcast_rt_entry->port_info + index);
+		}
+	}
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP:%s no entry found with port-id=%d",__FUNCTION__,port_id);
+	return NULL;
+}
+
+#if 0
 
 /* Sends general query message from all ports */
 int32_t sm_app_igmp_send_gen_query(uint64_t dp_handle, uint32_t dp_index,
@@ -270,6 +390,9 @@ int32_t sm_app_igmp_send_gen_query(uint64_t dp_handle, uint32_t dp_index,
 				status = OF_FAILURE;
 				break;
 			}
+                        app_msg->pkt_in->match_fields,
+                        ofu_start_setting_match_field_values(pktout_msg);
+                        ofu_end_setting_match_field_values(pktout_msg,match_start_loc,&length);
 			ofu_start_pushing_actions(pktout_msg);
 			retval = ofu_push_output_action(pktout_msg, dp_port, OFPCML_NO_BUFFER);
 			if (retval != OFU_ACTION_PUSH_SUCCESS)
@@ -314,8 +437,9 @@ int32_t sm_app_igmp_send_gen_query(uint64_t dp_handle, uint32_t dp_index,
 	  return status;
 }
 
+#endif
 
-
+#if 0
 static int32_t sm_app_mcast_get_free_entry(uint32_t dp_index)
 {
 	int32_t	ii;
@@ -481,6 +605,7 @@ static inline  uint16_t sm_app_mcast_get_entry_priority()
 {
 	return ((mcast_rtentry_priority == 0xFFFE)?10:mcast_rtentry_priority++);
 }
+#endif
 
 int32_t sm_app_igmp_del_mcast_entry(uint64_t dp_handle, uint16_t priority,
 				uint32_t src_ip, uint32_t group_ip,
@@ -745,69 +870,230 @@ int32_t sm_app_igmp_add_mcast_entry(uint64_t dp_handle, uint16_t priority,
 }
 
 
-int32_t sm_app_igmp_process_membership_report(uint64_t dp_handle, uint32_t dp_index,
-						uint32_t group_addr, uint32_t in_port)
+int32_t
+of_create_action_bucket_4_mc_traffic(struct of_msg *msg,
+                                     uint32_t group_id,
+                                     uint32_t bucket_id,
+                                     uint32_t port_num,
+                                     uint16_t *bucket_len)
+{
+     uint8_t starting_location;
+     uint16_t length_of_actions;
+     uint16_t length_of_buckets;
+     int32_t retval = OF_SUCCESS;
+
+     OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+     /*Appending bucket of type ALL */
+     ofu_start_appending_buckets_to_group(msg);
+
+     retval = ofu_append_bucket_to_group_type_all(msg,bucket_id);
+     if (retval != OFU_APPEND_BUCKET_SUCCESS)
+     {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"ofu_push_output_action failed");
+         return OF_FAILURE;
+     }
+     /*Adding OUTPUT port action to bucket*/
+     ofu_start_pushing_actions(msg);
+     retval = ofu_push_output_action(msg,port_num,0);
+     if (retval != OFU_ACTION_PUSH_SUCCESS)
+     {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"ofu_push_output_action failed");
+         return OF_FAILURE;
+     }
+
+     ofu_end_pushing_actions(msg, &starting_location, &length_of_actions);
+
+     ofu_end_appending_buckets_to_group(msg,&starting_location,&length_of_buckets);
+
+     *bucket_len = length_of_buckets;
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+     return OF_SUCCESS;
+}
+
+int32_t
+of_inform_dp_2_create_group_4_mc_traffic(uint64_t datapath_handle,
+                                         uint32_t group_id,
+                                         uint32_t bucket_id,
+                                         uint32_t port_num)
+{
+    struct of_msg *msg = NULL;
+    void *conn_info_p;
+    uint16_t  msg_len; 
+    uint16_t length_of_buckets;
+    int32_t status = OF_SUCCESS;
+    int32_t retval = OF_SUCCESS;
+  
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s",__FUNCTION__);
+    /* Creating group with one bucket with actions OUTPUT to Port */
+    msg_len = OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE +
+              OFU_GROUP_ACTION_BUCKET_LEN +
+              OFU_OUTPUT_ACTION_LEN;
+    do
+    {
+         msg = ofu_alloc_message(OFPT_GROUP_MOD, msg_len);
+         if (msg == NULL)
+         {
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"OF message alloc error");
+            status= OF_FAILURE;
+            break;
+         }
+
+         retval = of_create_action_bucket_4_mc_traffic(msg,group_id,bucket_id,port_num,&length_of_buckets);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Creation of bucket for multicast traffic failed");
+             status=retval;
+             break;
+         }
+
+         /*Create group mod message with ADD command with the action buckets created above*/
+         retval=of_add_group(msg, datapath_handle,group_id,OFPGT_ALL,length_of_buckets,&conn_info_p);
+         if ( retval != OFU_ADD_GROUP_ENTRY_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"add_group failed");
+             status=retval;
+             break;
+         }
+
+         /* Sending the group  mod message with add command to dp*/
+         retval=of_cntrlr_send_request_message(msg, datapath_handle, conn_info_p,NULL, NULL);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Sending Add group command failed");
+             status=retval;
+             break;
+         }
+    }
+    while(0);
+
+    if(status != OF_SUCCESS)
+    {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s ERROR",__FUNCTION__);
+      if (msg)
+           msg->desc.free_cbk(msg);
+    }
+
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+    return status;
+}
+
+
+int32_t
+of_inform_dp_2_add_port_4_mc_traffic(uint64_t datapath_handle,
+                                     uint32_t group_id,
+                                     uint32_t bucket_id,
+                                     uint32_t port_num)
+{
+    struct of_msg *msg = NULL;
+    void *conn_info_p;
+    uint16_t  msg_len; 
+    uint16_t length_of_buckets;
+    int32_t status = OF_SUCCESS;
+    int32_t retval = OF_SUCCESS;
+
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s",__FUNCTION__);
+    /* Creating group with one bucket with actions OUTPUT to Port */
+    msg_len = OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE +
+              OFU_GROUP_ACTION_BUCKET_LEN +
+              OFU_OUTPUT_ACTION_LEN;
+    do
+    {
+         msg = ofu_alloc_message(OFPT_GROUP_MOD, msg_len);
+         if (msg == NULL)
+         {
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"OF message alloc error");
+            status= OF_FAILURE;
+            break;
+         }
+
+         retval = of_create_action_bucket_4_mc_traffic(msg,group_id,bucket_id,port_num,&length_of_buckets);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," APpending  of bucket to multicast group failed");
+             status=retval;
+             break;
+         }
+
+         /*Append above created bucket to the group id created earlier for multicast group*/
+         retval=of_insert_bucket_to_group(msg, datapath_handle,group_id,
+                                         OFPGT_ALL,OFPG_BUCKET_LAST,length_of_buckets,&conn_info_p);
+         if ( retval != OFU_INSERT_BUCKET_TO_GROUP_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"add_group failed");
+             status=retval;
+             break;
+         }
+
+         /* Sending the group  mod message with add command to dp*/
+         retval=of_cntrlr_send_request_message(msg, datapath_handle, conn_info_p,NULL, NULL);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Sending Add group command failed");
+             status=retval;
+             break;
+         }
+    }
+    while(0);
+
+    if(status != OF_SUCCESS)
+    {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s ERROR",__FUNCTION__);
+      if (msg)
+           msg->desc.free_cbk(msg);
+    }
+
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+    return status;
+}
+
+int32_t sm_app_igmp_process_membership_report(uint64_t dp_handle, 
+                                              cntlr_app_mcast_rtentry_t *mc_rt_table,
+                                              uint8_t        mcast_routing_table_id,
+				              uint32_t group_addr, uint32_t in_port)
 {
 	uint32_t	ii, port_index;
+        cntlr_app_mcast_rtentry_t *mc_rt_entry;
 	uint32_t	group_id, bucket_id;
 	uint16_t	flow_id;
 	int32_t		status = OF_SUCCESS;
+	int32_t		retval = OF_SUCCESS;
 
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR," %s group addr %x table ID %d port %d",__FUNCTION__,group_addr,mcast_routing_table_id,in_port);
 
 	do
 	{
-		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: membership report..");
-		if ((ii = sm_app_mcast_get_entry_by_grp_address(dp_index, group_addr)) == OF_FAILURE)
-		{
-			ii = sm_app_mcast_get_free_entry(dp_index);
-			if (ii == OF_FAILURE)	{
-		           OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP: Free entry not found..");
-				ii = entry_index;/* TABLE is full overwrite least recently used */
-				entry_index++;
-				if (entry_index == OF_CNTLR_APP_MAX_MCAST_ROUTE_ENTRIES)
-					entry_index = 0;
-			}
-			else
-				dp_conf[dp_index].no_of_mcast_route_entries++;
-		
-		        OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:");
-			dp_conf[dp_index].mcast_rt_table[ii].grp_addr = group_addr;
-			dp_conf[dp_index].mcast_rt_table[ii].port_info[0].port_id = in_port;
-			dp_conf[dp_index].mcast_rt_table[ii].port_info[0].binuse = TRUE;
-			dp_conf[dp_index].mcast_rt_table[ii].binuse = TRUE;
-			dp_conf[dp_index].mcast_rt_table[ii].no_of_outports = 1;
-
-			group_id = sm_app_mcast_get_group_id();
-			dp_conf[dp_index].mcast_rt_table[ii].grp_id = group_id;
-			flow_id = sm_app_mcast_get_entry_priority();
-			dp_conf[dp_index].mcast_rt_table[ii].flow_id = flow_id;
-
-			if (sm_app_igmp_add_group_to_dprm(dp_handle,
-							OFPGT_ALL, group_id) != OF_SUCCESS)
+		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: membership report.. %d ",__LINE__);
+                mc_rt_entry = sm_app_mcast_get_entry_by_grp_address(mc_rt_table,group_addr);
+                if(mc_rt_entry == NULL)
+                {
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Multicast addr present\r\n");
+			mc_rt_entry = sm_app_mcast_get_free_entry(mc_rt_table);
+			if (mc_rt_entry == NULL)	
 			{
 				status = OF_FAILURE;
 				break;
 			}
 
-			bucket_id = dp_conf[dp_index].mcast_rt_table[ii].no_of_outports;
- 			if (sm_app_igmp_add_bucket_to_group(dp_handle,
-							group_id, bucket_id) != OF_SUCCESS)
-			{
+			mc_rt_entry->grp_addr = group_addr;
+			mc_rt_entry->port_info[0].port_id = in_port;
+			mc_rt_entry->port_info[0].binuse = TRUE;
+                        mc_rt_entry->port_info[0].bucket_id = SMP_APP_IGMP_BUCKET_ID;
+			mc_rt_entry->binuse = TRUE;
+			mc_rt_entry->num_of_outports = 1;
+
+			group_id = mc_rt_entry->grp_id = SMP_APP_IGMP_GROUP_ID;
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"ADD bucket %d in group %d",mc_rt_entry->port_info[0].bucket_id,mc_rt_entry->grp_id);
+                        if(of_inform_dp_2_create_group_4_mc_traffic(dp_handle,group_id,
+                                                      mc_rt_entry->port_info[0].bucket_id,in_port) != OF_SUCCESS)
+                        {
+				OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:adding Group entry  failed");
 				status = OF_FAILURE;
 				break;
-			}
-			dp_conf[dp_index].mcast_rt_table[ii].port_info[0].bucket_id = bucket_id;
-			
-			if (sm_app_igmp_add_action_to_bucket(dp_handle,
-							group_id, bucket_id,
-							OFPAT_OUTPUT, in_port) != OF_SUCCESS)
-			{
-				status = OF_FAILURE;
-				break;
-			}
-		
+                        }
+
+			flow_id = mc_rt_entry->flow_id = SMP_APP_IGMP_FLOW_ID;
 			if (sm_app_igmp_add_mcast_entry(dp_handle, flow_id, 0,
-						 group_addr, group_id, dp_conf[dp_index].mcast_routing_table_id, 0) != OF_SUCCESS)
+						 group_addr, group_id, mcast_routing_table_id, 0) != OF_SUCCESS)
 			{
 				OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:adding flow entry using flowmod msg failed");
 				status = OF_FAILURE;
@@ -823,125 +1109,229 @@ int32_t sm_app_igmp_process_membership_report(uint64_t dp_handle, uint32_t dp_in
 			}
 		}
 		else	{
-				OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:");
-			port_index = sm_app_mcast_get_portentry_by_id(dp_index, ii, in_port);
-			if (port_index == OF_FAILURE)	{
-				port_index = sm_app_mcast_get_free_portentry(dp_index, ii);
-		
-				dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].port_id = in_port;
-				dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].binuse = TRUE;
-				dp_conf[dp_index].mcast_rt_table[ii].no_of_outports++;
-				group_id = dp_conf[dp_index].mcast_rt_table[ii].grp_id;
-				bucket_id = dp_conf[dp_index].mcast_rt_table[ii].no_of_outports;
+                              mcast_portinfo_t *mc_port_info = NULL;
 
-				if (sm_app_igmp_add_bucket_to_group(dp_handle,
-								group_id, bucket_id) != OF_SUCCESS)
-				{
+		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: membership report.. %d ",__LINE__);
+			      if(sm_app_mcast_get_portentry_by_id(mc_rt_entry, in_port) == NULL)
+                              {
+				 mc_port_info = sm_app_mcast_get_free_portentry(mc_rt_entry);
+                                 if(mc_port_info == NULL)
+		                 {
+				     OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
+                                                "IGMP:MC Port table for MC group %x address is FULL",
+                                                  mc_rt_entry->grp_addr
+                                                );
+				     status = OF_FAILURE;
+				     break;
+				 }
+
+                                 mc_port_info->port_id   = in_port;
+                                 mc_port_info->bucket_id = SMP_APP_IGMP_BUCKET_ID;
+                                 mc_port_info->binuse    = TRUE;
+                               
+                                 mc_rt_entry->num_of_outports++;
+                                 
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Insert bucket %d in group %d",mc_port_info->bucket_id,mc_rt_entry->grp_id);
+                                 retval = of_inform_dp_2_add_port_4_mc_traffic(dp_handle,
+                                                                               mc_rt_entry->grp_id,
+                                                                               mc_port_info->bucket_id,
+                                                                               in_port);
+                                 if(retval != OF_SUCCESS)
+                                 {
+					OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
+                                                   "IGMP:Add port bucket for group %x failed",
+                                                   mc_rt_entry->grp_addr);
 					status = OF_FAILURE;
 					break;
-				}
-
-				if (sm_app_igmp_add_action_to_bucket(dp_handle,
-								group_id, bucket_id,
-								OFPAT_OUTPUT, in_port) != OF_SUCCESS)
-				{
-					status = OF_FAILURE;
-					break;
-				}
-				dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].bucket_id = bucket_id;
-
-				if (of_group_frame_and_send_message_request(dp_handle,
-								group_id, MOD_GROUP) != OF_SUCCESS)
-				{
-					OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:sending groupmod modify msg failed");
-					status = OF_FAILURE;
-					break;
-				}
-			}
-                        else
-                        {
-			   OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP: Memeber is already joined");
-
-                        }
-		}
+				 }
+		              }
+                       }
+		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: membership report.. %d ",__LINE__);
 	}while(0);
+		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: membership report.. %d ",__LINE__);
 
 	return status;
 }
 
-
-int32_t sm_app_igmp_process_leave(uint64_t dp_handle, uint32_t dp_index,
-				uint32_t group_addr, uint32_t in_port)
+int32_t
+of_inform_dp_abt_port_del_from_mc_group(uint64_t datapath_handle,
+                                        uint32_t group_id,
+                                        uint32_t bucket_id)
 {
-	int32_t	ii, port_index;
+    struct of_msg *msg = NULL;
+    void *conn_info_p;
+    uint16_t  msg_len; 
+    int32_t status = OF_SUCCESS;
+    int32_t retval = OF_SUCCESS;
+
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"ENTRY");
+    /* Creating group with delete bucket command */
+    msg_len = OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE;
+
+    do
+    {
+         msg = ofu_alloc_message(OFPT_GROUP_MOD, msg_len);
+         if (msg == NULL)
+         {
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"OF message alloc error");
+            status= OF_FAILURE;
+            break;
+         }
+
+        /*Remove  earlier created bucket for the given port of multicast group  from the group id */
+         retval=of_remove_bucket_from_group(msg, datapath_handle,group_id,
+                                         OFPGT_ALL,bucket_id,&conn_info_p);
+         if ( retval != OFU_REMOVE_BUCKET_FROM_GROUP_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"add_group failed");
+             status=retval;
+             break;
+         }
+
+         /* Sending the group  mod message with remove bucket command to dp*/
+         retval=of_cntrlr_send_request_message(msg, datapath_handle, conn_info_p,NULL, NULL);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,
+                        "Sending Remove bucket(%d) command from group(=%x)failed",bucket_id,group_id);
+             status=retval;
+             break;
+         }
+    }
+    while(0);
+
+    if(status != OF_SUCCESS)
+    {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s ERROR",__FUNCTION__);
+      if (msg)
+           msg->desc.free_cbk(msg);
+    }
+
+    return status;
+}
+
+int32_t
+of_inform_dp_abt_deletion_of_mc_group(uint64_t datapath_handle,
+                                 uint32_t group_id)
+{
+    struct of_msg *msg = NULL;
+    void *conn_info_p;
+    uint16_t  msg_len; 
+    int32_t status = OF_SUCCESS;
+    int32_t retval = OF_SUCCESS;
+
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Entry");
+    /* Creating group with delete bucket command */
+    msg_len = OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE;
+
+    do
+    {
+         msg = ofu_alloc_message(OFPT_GROUP_MOD, msg_len);
+         if (msg == NULL)
+         {
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"OF message alloc error");
+            status= OF_FAILURE;
+            break;
+         }
+
+         /*Remove  earlier created  multicast group id */
+         retval=of_delete_group(msg,datapath_handle,group_id, &conn_info_p);
+         if (retval != OFU_DELETE_GROUP_ENTRY_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,
+                        "IGMP:deletion of multicast group(=%x) failed",group_id);
+             status=retval;
+             break;
+         }
+
+         /* Sending the group  mod message with deletion of group command to dp*/
+         retval=of_cntrlr_send_request_message(msg, datapath_handle, conn_info_p,NULL, NULL);
+         if ( retval != OF_SUCCESS)
+         {
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Sending Deletion of group command failed");
+             status=retval;
+             break;
+         }
+    }
+    while(0);
+
+    if(status != OF_SUCCESS)
+    {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s ERROR");
+      if (msg)
+           msg->desc.free_cbk(msg);
+    }
+
+    return status;
+}
+
+
+int32_t sm_app_igmp_process_leave(uint64_t dp_handle,
+                                  cntlr_app_mcast_rtentry_t *mc_rt_table, 
+                                  uint8_t        mcast_routing_table_id,
+				  uint32_t group_addr, uint32_t in_port)
+{
+        cntlr_app_mcast_rtentry_t *mc_rt_entry = NULL;
+        mcast_portinfo_t          *mc_port_info = NULL;
 	uint32_t	group_id, bucket_id;
 	uint16_t	flow_id;
 	int32_t		status = OF_SUCCESS;
+	int32_t		retval = OF_SUCCESS;
 
-	do
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR," %s group addr %x table ID %d port %d",__FUNCTION__,group_addr,mcast_routing_table_id,in_port);
+	if ((mc_rt_entry = sm_app_mcast_get_entry_by_grp_address(mc_rt_table, group_addr)) != NULL)
 	{
-		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_INFO,"IGMP: processing leave");
-		if ((ii = sm_app_mcast_get_entry_by_grp_address(dp_index, group_addr)) != OF_FAILURE)
-		{
-			port_index = sm_app_mcast_get_portentry_by_id(dp_index, ii, in_port);
-			if (port_index != OF_FAILURE)	{
-				//dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].binuse = FALSE;
-				//dp_conf[dp_index].mcast_rt_table[ii].no_of_outports--;
-				group_id = dp_conf[dp_index].mcast_rt_table[ii].grp_id;
-				bucket_id = dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].bucket_id;
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Multicast addr present\r\n");
+            if(mc_rt_entry->num_of_outports == 1) 
+            {
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Only one port is registered delete group itself");
+	         mc_rt_entry->binuse = FALSE;
+                 /* No ports interested to join the group, delete multicast group itself */
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Delete group %d",mc_rt_entry->grp_id);
+                 retval = of_inform_dp_abt_deletion_of_mc_group(dp_handle,
+                                                                    mc_rt_entry->grp_id);
+                 if(retval != OF_SUCCESS)
+	    	 {
+  		     OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR, "IGMP: Failed to del multicast group");
+		     return OF_FAILURE;
+	         }
 
-				if (sm_app_igmp_del_bucket_from_group(dp_handle,
-								 group_id, bucket_id) != OF_SUCCESS)
-				{
-					status = OF_FAILURE;
-					break;
-				}
+                if(sm_app_igmp_del_mcast_entry(dp_handle,
+                                               mc_rt_entry->flow_id,0,
+                                               group_addr,
+                                               mc_rt_entry->grp_id,
+                                               mcast_routing_table_id,0) != OF_SUCCESS)
+	        {
+  	            OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR, "IGMP: Failed to del multicast flow entry");
+		    return OF_FAILURE;
+                }                    
+	        mc_rt_entry->num_of_outports = 0;
+             }
+             else
+             {
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"More than one port registered delete only corresponding bucket");
+                 mc_port_info = sm_app_mcast_get_portentry_by_id(mc_rt_entry, in_port);
+	         if (mc_port_info != NULL)	
+                 {
+                 OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Removing bucket %d from group %d",mc_port_info->bucket_id,mc_rt_entry->grp_id);
+                     /*Just remove corresponding bucket from the group*/
+                     retval = of_inform_dp_abt_port_del_from_mc_group(dp_handle,
+                                                                      mc_rt_entry->grp_id,
+                                                                      mc_port_info->bucket_id);
+                     if(retval != OF_SUCCESS)
+		     {
+  	                  OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR, "IGMP: Failed to del multicast bucket");
+   	                  return OF_FAILURE;
+		     }
+                     mc_port_info->binuse = FALSE;
+		     mc_rt_entry->num_of_outports--;
+                 }
+             }
+             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Entry");
+         }
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Entry");
 
-		
-				if ((dp_conf[dp_index].mcast_rt_table[ii].no_of_outports - 1) == 0) {
-					dp_conf[dp_index].mcast_rt_table[ii].binuse = FALSE;
-					dp_conf[dp_index].no_of_mcast_route_entries--;
-				
-					if (of_group_frame_and_send_message_request(dp_handle,
-								group_id, DEL_GROUP) != OF_SUCCESS)
-					{
-						OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
-							"IGMP:sending groupmod del msg failed for leave msg");
-						status = OF_FAILURE;
-						break;
-					}
-					sm_app_igmp_del_group_from_dprm(dp_handle, group_id);
-
-					flow_id = dp_conf[dp_index].mcast_rt_table[ii].flow_id;	
-					if (sm_app_igmp_del_mcast_entry(dp_handle, flow_id, 0,
-                                              group_addr, group_id, dp_conf[dp_index].mcast_routing_table_id, 0) != OF_SUCCESS)
-					{
-						OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"IGMP:sending flowmod del msg failed");
-						status = OF_FAILURE;
-						break;
-					}	
-				}
-				else	{
-					if (of_group_frame_and_send_message_request(dp_handle,
-								group_id, MOD_GROUP) != OF_SUCCESS)
-					{
-						OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
-							"IGMP:sending groupmod modify msg failed for igmp leave");
-						status = OF_FAILURE;
-						break;
-					}
-				}
-				dp_conf[dp_index].mcast_rt_table[ii].port_info[port_index].binuse = FALSE;
-				dp_conf[dp_index].mcast_rt_table[ii].no_of_outports--;
-			}
-		}
-		else {
-			OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
-				"IGMPLEAVE: no entry found with grp-add=%x",group_addr);
-		}
-
-	}while(0);
-	return status;
+	return OF_SUCCESS;
 }
 
 int32_t
@@ -954,6 +1344,8 @@ sm_app_igmp_pkt_in_rcvd(int64_t controller_handle,
                      void   *cbk_arg2)
 {
 	struct dprm_datapath_entry *pdatapath_info;
+        cntlr_app_mcast_rtentry_t  *mc_rt_table = NULL;
+        uint8_t mcast_routing_table_id;
 	uint32_t group_addr, dp_index, in_port;
 	uint16_t igmp_type;
 	uint8_t	*pkt = pkt_in->packet;
@@ -961,7 +1353,7 @@ sm_app_igmp_pkt_in_rcvd(int64_t controller_handle,
 	int32_t retval = OF_SUCCESS;
 	int32_t status = OF_SUCCESS;
 
-	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_DEBUG," PKT-IN RECEIVED FOR IGMP PKT..");
+	OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR," PKT-IN RECEIVED FOR IGMP PKT..");
 	if (get_datapath_byhandle(datapath_handle, &pdatapath_info) != DPRM_SUCCESS)	{
 		OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"No DP Entry with given datapath_handle=%llx",datapath_handle);
 		if (msg != NULL)	{
@@ -973,10 +1365,13 @@ sm_app_igmp_pkt_in_rcvd(int64_t controller_handle,
  
 	do
 	{
-		for (dp_index = 0; dp_index < no_of_data_paths_attached_g; dp_index++)	{
+		for (dp_index = 0; dp_index < no_of_data_paths_attached_g; dp_index++)	
 			if (dp_conf[dp_index].dp_handle == datapath_handle)
-				break;
-		}
+                        {
+                             mc_rt_table = dp_conf[dp_index].mcast_rt_table;
+                             mcast_routing_table_id = dp_conf[dp_index].mcast_routing_table_id;
+			     break;
+		        }
   
 		if (dp_index == no_of_data_paths_attached_g)	{
 			OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
@@ -1016,7 +1411,8 @@ sm_app_igmp_pkt_in_rcvd(int64_t controller_handle,
 					OF_CNTLR_IGMP_HEADER_OFFSET(pkt) + 
 					OF_CNTLR_IGMPV3_GROUP_ADDR_OFFSET));
 process_join:
-				if (sm_app_igmp_process_membership_report(datapath_handle, dp_index,
+				if (sm_app_igmp_process_membership_report(datapath_handle, mc_rt_table,
+                                                                          mcast_routing_table_id,
 									  group_addr, in_port) != OF_SUCCESS)
 				{
 					status = OF_FAILURE;
@@ -1027,7 +1423,9 @@ process_join:
 			case IGMPV2_LEAVE_GROUP:
 				group_addr = ntohl(*(uint32_t*)(pkt + OF_CNTLR_IGMP_HEADER_OFFSET(pkt) + 
 									OF_CNTLR_IGMPV2_GROUP_ADDR_OFFSET));
-				if (sm_app_igmp_process_leave(datapath_handle, dp_index, group_addr, in_port) != OF_SUCCESS)
+				if (sm_app_igmp_process_leave(datapath_handle, mc_rt_table, 
+                                                              mcast_routing_table_id,
+                                                              group_addr, in_port) != OF_SUCCESS)
 				{
 					OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,
 						"processiong of IGMP leave failed.grp-ip=%x inport=%d",group_addr,in_port);
@@ -1129,6 +1527,8 @@ int32_t sm_app_add_mcast_proactive_entry(uint64_t datapath_handle,
 		    break;
 	        }
 
+#if 0
+Rajesh dropping dest multicast mac 
 		retval =  of_set_destination_mac(msg,
 				mcst_mac,
 				TRUE,
@@ -1140,6 +1540,7 @@ int32_t sm_app_add_mcast_proactive_entry(uint64_t datapath_handle,
 			status = OF_FAILURE;
 			break;
 		}
+#endif
 
 		if (*mcast_ip){
 		  retval = of_set_ipv4_destination(msg, mcast_ip, ((*mask)?TRUE:FALSE), mask);
@@ -1341,8 +1742,8 @@ void sm_app_igmp_port_ready_cbk(uint32_t notification_type,
 		return;
 	}
 
-	sm_app_igmp_send_gen_query(dp_handle, dp_index,
-			notification_data.port_id, notification_data.port_name);
+	//sm_app_igmp_send_gen_query(dp_handle, dp_index,
+	//		notification_data.port_id, notification_data.port_name);
 }
 
 

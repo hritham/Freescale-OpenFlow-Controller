@@ -147,6 +147,8 @@ sm_app_arp_request_n_response_pkt_process(struct of_app_msg *app_msg)
   int32_t  retval = OF_SUCCESS;
   uint64_t  dpid, meta_data, meta_data_mask;
   uint32_t  dp_index;
+  uint8_t     *match_start_loc = NULL;
+  uint16_t  length;
 
 
   int64_t controller_handle;
@@ -473,15 +475,23 @@ sm_app_arp_request_n_response_pkt_process(struct of_app_msg *app_msg)
       return status;
     }
 
+     retval = ofu_set_in_port_field_as_controller(reply_msg,
+                                                  pkt_in->match_fields_length,
+                                                  (void*)app_msg->pkt_in->match_fields);
+     if(retval != OFU_SET_FIELD_SUCCESS)
+     {
+       printf("Set Inport to Controler port is failed");
+       status = OF_FAILURE;
+       break;
+     }
+
     retval=of_frame_pktout_msg(  
         reply_msg,
         datapath_handle,
         FALSE,
         OFP_NO_BUFFER,
-        OFPP_CONTROLLER,
         0,
         &conn_info_p
-
         );
     if (retval != OF_SUCCESS)
     {
@@ -491,6 +501,8 @@ sm_app_arp_request_n_response_pkt_process(struct of_app_msg *app_msg)
       status = OF_FAILURE;
       break;
     }
+    ofu_start_setting_match_field_values(reply_msg);
+    ofu_end_setting_match_field_values(reply_msg,match_start_loc,&length);
     ofu_start_pushing_actions(reply_msg);
     retval = ofu_push_output_action(reply_msg,in_port,OFPCML_NO_BUFFER);
     if (retval != OFU_ACTION_PUSH_SUCCESS)

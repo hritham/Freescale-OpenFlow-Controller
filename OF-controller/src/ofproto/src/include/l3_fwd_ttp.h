@@ -13,7 +13,12 @@
 
 /*Table id1:Etherenet Filtering Table */
 #define CNTLR_SAMPLE_L3_FWD_TTP_UNICAST_TABLE_ID1_NAME "MultiCastClassifierTable"
+#if 0
+Rajesh changing  columns 3 to 2
 #define CNTLR_SAMPLE_L3_FWD_TTP_UNICAST_TABLE_ID1_COLUMNS 3
+#else
+#define CNTLR_SAMPLE_L3_FWD_TTP_UNICAST_TABLE_ID1_COLUMNS 2
+#endif
 #define CNTLR_SAMPLE_L3_FWD_TTP_UNICAST_TABLE_ID1_ROWS    100
 
 

@@ -907,7 +907,8 @@ void sm_arp_app_arp_req_timer_cbk(void *cbk_arg1,  //arp_req
   }
 }
 
-int32_t sm_arp_app_send_arp_req(cntlr_app_arp_req_t *arp_req, uint64_t datapath_handle)
+int32_t sm_arp_app_send_arp_req(cntlr_app_arp_req_t *arp_req, uint64_t datapath_handle,
+                                struct ofl_packet_in  *pkt_in)
 {
   uint8_t  arp_request[50];
   uint32_t arp_pkt_len = 0;
@@ -917,6 +918,8 @@ int32_t sm_arp_app_send_arp_req(cntlr_app_arp_req_t *arp_req, uint64_t datapath_
   uint8_t       *action_start_loc;
   uint16_t      action_len;
   uint16_t       msg_len;
+  uint8_t     *match_start_loc = NULL;
+  uint16_t  length;
   struct of_msg *req_msg;
   int32_t  status = OF_SUCCESS;
   int32_t  retval = OF_SUCCESS;
@@ -998,12 +1001,22 @@ int32_t sm_arp_app_send_arp_req(cntlr_app_arp_req_t *arp_req, uint64_t datapath_
     status = OF_FAILURE;
     return status;
   }
+
+  retval = ofu_set_in_port_field_as_controller(req_msg,
+                                               pkt_in->match_fields_length,
+                                               (void*)pkt_in->match_fields);
+  if(retval != OFU_SET_FIELD_SUCCESS)
+  {
+      OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"Set Inport to Controler port is failed");
+      status = OF_FAILURE;
+      return status; 
+  }
+
   retval=of_frame_pktout_msg(
       req_msg,
       datapath_handle,
       FALSE,
       OFP_NO_BUFFER,
-      OFPP_CONTROLLER,
       0,
       &conn_info_p
       );
@@ -1015,6 +1028,8 @@ int32_t sm_arp_app_send_arp_req(cntlr_app_arp_req_t *arp_req, uint64_t datapath_
     status = OF_FAILURE;
     return status;
   }
+  ofu_start_setting_match_field_values(req_msg);
+  ofu_end_setting_match_field_values(req_msg,match_start_loc,&length);
   ofu_start_pushing_actions(req_msg);
   retval = ofu_push_output_action(req_msg,arp_req->in_port,OFPCML_NO_BUFFER);
   if (retval != OFU_ACTION_PUSH_SUCCESS)
@@ -1317,7 +1332,7 @@ sm_app_arp_table_pkt_process(struct of_app_msg *app_msg)
       strcpy(arp_req.iface_name,iface_name); 
       arp_req.in_port = out_port;
 
-      if (sm_arp_app_send_arp_req(&arp_req, datapath_handle) != OF_SUCCESS)
+      if (sm_arp_app_send_arp_req(&arp_req, datapath_handle,app_msg->pkt_in) != OF_SUCCESS)
       {
         status = OF_FAILURE;
         OF_LOG_MSG(OF_LOG_SAMPLE_APP, OF_LOG_ERROR,"Failed to send arp request");
@@ -3607,6 +3622,8 @@ int32_t sm_app_frame_and_send_pktout_to_dp(uint64_t datapath_handle, struct ofl_
   uint64_t meta_data;
   int32_t flags=0;
   struct pkt_mbuf *mbuf = NULL;
+  uint8_t     *match_start_loc = NULL;
+  uint16_t  length;
 
 
   do
@@ -3653,7 +3670,6 @@ int32_t sm_app_frame_and_send_pktout_to_dp(uint64_t datapath_handle, struct ofl_
         datapath_handle,
         TRUE,
         OFP_NO_BUFFER,
-        in_port,
         0,
         &conn_info_p
         );
@@ -3664,6 +3680,8 @@ int32_t sm_app_frame_and_send_pktout_to_dp(uint64_t datapath_handle, struct ofl_
       break;
     }
 
+     ofu_start_setting_match_field_values(msg);
+     ofu_end_setting_match_field_values(msg,match_start_loc,&length);
     ofu_start_pushing_actions(msg);
 #ifdef FSLX_COMMON_AND_L3_EXT_SUPPORT
     retval = fslx_action_set_metadata(msg, meta_data);

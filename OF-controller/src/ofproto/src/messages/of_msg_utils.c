@@ -54,6 +54,7 @@ of_set_in_port(struct    of_msg *msg,
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d \r\n",__FUNCTION__,__LINE__);
   if ((msg_desc->ptr1+msg_desc->length1 + OFU_IN_PORT_FIELD_LEN) >
       (msg->desc.start_of_data + msg_desc->buffer_len)) 
   {
@@ -1491,6 +1492,11 @@ ofu_start_pushing_actions(struct of_msg *msg)
 
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
+
+  if(msg_desc->ptr2 == msg_desc->ptr3)
+  {
+     msg_desc->ptr2 = msg_desc->ptr1+ msg_desc->length1;
+  }
 
   msg_desc->ptr3 =  msg_desc->ptr2 + msg_desc->length2;
   msg_desc->length3 = 0; 
@@ -3097,14 +3103,14 @@ ofu_end_pushing_actions(struct of_msg *msg,
   msg_desc = &msg->desc;
 
   starting_location = msg->desc.ptr3;
-  msg->desc.length2 =   msg->desc.length2 + msg->desc.length3 ;
+  msg->desc.length2 += msg->desc.length3;
   *length_of_actions =  msg->desc.length2;
   msg->desc.data_len += msg->desc.length2 ;
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
 }
 
 /*########################### Match field Parseing routines #################################*/
-  int32_t
+int32_t
 ofu_get_in_port_field(struct of_msg *msg,
     void *match_fields,
     uint16_t match_fields_len,
@@ -3137,6 +3143,40 @@ ofu_get_in_port_field(struct of_msg *msg,
 
   return OFU_IN_PORT_FIELD_NOT_PRESENT;
 }
+
+int32_t
+ofu_set_in_port_field_as_controller(struct of_msg *msg,
+                                    uint16_t match_field_len,
+                                    void *match_fields)
+{
+  uint32_t          oxm_header;
+  uint8_t          *ptr;
+  uint16_t          parsed_data_len;
+
+  cntlr_assert(match_fields != NULL);
+
+  ptr =  (uint8_t*)match_fields;
+
+  while(match_field_len)
+  {
+    oxm_header = ntohl(*(uint32_t*)ptr);
+
+    if(OXM_FIELD(oxm_header) == OFPXMT_OFB_IN_PORT)
+    {
+      *(uint32_t*)(ptr+OF_OXM_HDR_LEN) = htonl(OFPP_CONTROLLER);
+      return OFU_SET_FIELD_SUCCESS;  
+    }
+    else
+    {
+      parsed_data_len = (OF_OXM_HDR_LEN + OXM_LENGTH(oxm_header)); 
+      match_field_len -= parsed_data_len;
+      ptr              += parsed_data_len;
+    }
+  }
+
+  return OFU_IN_PORT_FIELD_NOT_PRESENT;
+}
+
 
 int32_t
 ofu_get_metadata_field(struct of_msg *msg,
@@ -3180,109 +3220,336 @@ ofu_start_appending_buckets_to_group(struct of_msg *msg)
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
-  msg->desc.ptr2    =msg_desc->ptr1 + msg_desc->length1;
+  msg->desc.ptr2    = msg->desc.start_of_data + (sizeof(struct ofp_group_mod));
   msg->desc.length2 = 0;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
   return;
 }
 
-  int32_t
-ofu_append_bucket_to_group_type_all(struct of_msg *msg)
+/*Before calling following functions, first need to push all actions 
+  and call this api update bucket information includeing length of actions*/
+int32_t
+ofu_append_bucket_to_group_type_all(struct of_msg *msg,
+                                    uint32_t  bucket_id)
 {
   struct of_msg_descriptor *msg_desc;
   struct ofp_bucket *bucket;
+  uint16_t  bucket_len,roundup_bytes;
 
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Enter");
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
-  msg_desc->ptr2 =msg_desc->ptr2+msg_desc->length2;
-  msg_desc->length2=0; /* ptr1 always points to new bucket */
-  bucket=(struct ofp_bucket *) (msg_desc->ptr2);
-  bucket->len=htons(OFU_GROUP_ACTION_BUCKET_LEN);
-  msg->desc.length2+= OFU_GROUP_ACTION_BUCKET_LEN;
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
+  if(msg->desc.length2 > 0)
+  {
+     /*Update previous bucket length value */
+     bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 - (msg->desc.length3 + OFU_GROUP_ACTION_BUCKET_LEN));
+     bucket_len = OFU_GROUP_ACTION_BUCKET_LEN+msg->desc.length3+msg->desc.length1;
+     roundup_bytes = ROUND_UP(bucket_len);
+     memset(((uint8_t*)bucket + bucket_len),0,roundup_bytes);
+     bucket->len=htons(bucket_len + roundup_bytes); 
+     /*Update actions len in previous bucket */
+     bucket->action_list_len = htons(msg->desc.length3);
+     msg->desc.length2 += roundup_bytes + msg->desc.length1;/*include prop len */
+  }
+
+  if( (msg_desc->ptr2+msg_desc->length2 + OFU_GROUP_ACTION_BUCKET_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update current bucket details */
+  bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 + msg->desc.length1);
+  bucket->bucket_id = htonl(bucket_id);
+  msg->desc.length2 += OFU_GROUP_ACTION_BUCKET_LEN ;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Exit");
   return OFU_APPEND_BUCKET_SUCCESS;
 }
 
-  int32_t
+/*Before calling following functions, first need to push all actions 
+  and call this api update bucket information includeing length of actions*/
+int32_t
 ofu_append_bucket_to_group_type_select(struct of_msg *msg,
-    uint16_t weight)
+                                       uint32_t  bucket_id)
 {
   struct of_msg_descriptor *msg_desc;
   struct ofp_bucket *bucket;
+  uint16_t  bucket_len,roundup_bytes;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+  cntlr_assert(msg != NULL);
+  msg_desc = &msg->desc;
+
+  if(msg->desc.length2 > 0)
+  {
+     /*Update previous bucket length value */
+     bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 - (msg->desc.length3 + OFU_GROUP_ACTION_BUCKET_LEN));
+     bucket_len = OFU_GROUP_ACTION_BUCKET_LEN+msg->desc.length3+msg->desc.length1;
+     roundup_bytes = ROUND_UP(bucket_len);
+     memset(((uint8_t*)bucket + bucket_len),0,roundup_bytes);
+     bucket->len=htons(bucket_len + roundup_bytes);
+     /*Update actions len in previous bucket */
+     bucket->action_list_len = htons(msg->desc.length3);
+     msg->desc.length2 += roundup_bytes + msg->desc.length1;/*include prop len */
+  }
+
+  if( (msg_desc->ptr2+msg_desc->length2 + OFU_GROUP_ACTION_BUCKET_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update current bucket details */
+  bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2+msg->desc.length1);
+  bucket->bucket_id = htonl(bucket_id);
+  msg->desc.length2 += OFU_GROUP_ACTION_BUCKET_LEN;
+       
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d bucket id=%d",__FUNCTION__,__LINE__,bucket_id);
+  return OFU_APPEND_BUCKET_SUCCESS;
+}
+
+int32_t
+ofu_append_bucket_to_group_type_indirect(struct of_msg *msg,
+                                       uint32_t  bucket_id)
+{
+  struct of_msg_descriptor *msg_desc;
+  struct ofp_bucket *bucket;
+  uint16_t  bucket_len,roundup_bytes;
 
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
-  msg_desc->ptr2 =msg_desc->ptr2+msg_desc->length2;
-  msg_desc->length2=0; /* ptr2 always points to new bucket */
-  bucket=(struct ofp_bucket *) (msg_desc->ptr2);
-  bucket->len=htons(OFU_GROUP_ACTION_BUCKET_LEN);
-  bucket->weight=htons(weight);
-  msg->desc.length2+=OFU_GROUP_ACTION_BUCKET_LEN;
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
+  if(msg->desc.length2 > 0)
+  {
+     /*Update previous bucket length value */
+     bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 - (msg->desc.length3 + OFU_GROUP_ACTION_BUCKET_LEN));
+     bucket_len = OFU_GROUP_ACTION_BUCKET_LEN+msg->desc.length3+msg->desc.length1;
+     roundup_bytes = ROUND_UP(bucket_len);
+     memset(((uint8_t*)bucket + bucket_len),0,roundup_bytes);
+     bucket->len=htons(bucket_len + roundup_bytes);
+
+     /*Update actions len in previous bucket */
+     bucket->action_list_len = htons(msg->desc.length3);
+     msg->desc.length2 += roundup_bytes + msg->desc.length1;/*include prop len */
+  }
+
+  if( (msg_desc->ptr2+msg_desc->length2 + OFU_GROUP_ACTION_BUCKET_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update current bucket details */
+  bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2+msg->desc.length1);
+  bucket->bucket_id = htonl(bucket_id);
+  msg->desc.length2 += OFU_GROUP_ACTION_BUCKET_LEN;
+
   return OFU_APPEND_BUCKET_SUCCESS;
 }
 
-  int32_t       
-ofu_append_bucket_to_group_type_indirect(struct of_msg *msg)
-{
-  struct of_msg_descriptor *msg_desc;
-  struct ofp_bucket *bucket;
-  cntlr_assert(msg != NULL);
-  msg_desc = &msg->desc;
-  msg_desc->ptr2 =msg_desc->ptr2+msg_desc->length2;
-  msg_desc->length2=0; /* ptr1 always points to new bucket */
-  bucket=(struct ofp_bucket *) (msg_desc->ptr2);
-  bucket->len=htons(OFU_GROUP_ACTION_BUCKET_LEN);
-  msg->desc.length2+= OFU_GROUP_ACTION_BUCKET_LEN;
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);     
-  return OFU_APPEND_BUCKET_SUCCESS;
-}
-
-  int32_t
+int32_t
 ofu_append_bucket_to_group_type_fast_failover(struct of_msg *msg,
-    uint32_t watch_port,
-    uint32_t watch_group)
-
+                                              uint32_t  bucket_id)
 {
   struct of_msg_descriptor *msg_desc;
   struct ofp_bucket *bucket;
+  uint16_t  bucket_len,roundup_bytes;
 
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
-  msg_desc->ptr2 =msg_desc->ptr2+msg_desc->length2;
-  msg_desc->length2=0; /* ptr2 always points to new bucket */
-  bucket=(struct ofp_bucket *) (msg_desc->ptr2);
-  bucket->len=htons(OFU_GROUP_ACTION_BUCKET_LEN);
-  bucket->watch_port=htonl(watch_port);
-  bucket->watch_group=htonl(watch_group);
-  msg->desc.length2+=OFU_GROUP_ACTION_BUCKET_LEN;
+  if(msg->desc.length2 > 0)
+  {
+     /*Update previous bucket length value */
+     bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 - (msg->desc.length3 + OFU_GROUP_ACTION_BUCKET_LEN));
+     bucket_len = OFU_GROUP_ACTION_BUCKET_LEN+msg->desc.length3+msg->desc.length1;
+     roundup_bytes = ROUND_UP(bucket_len);
+     memset(((uint8_t*)bucket + bucket_len),0,roundup_bytes);
+     bucket->len=htons(bucket_len + roundup_bytes);
+     /*Update actions len in previous bucket */
+     bucket->action_list_len = htons(msg->desc.length3);
+     msg->desc.length2 += msg->desc.length1;/*include prop len */
+     msg->desc.length2 += roundup_bytes + msg->desc.length1;/*include prop len */
+  }
 
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
+  if( (msg_desc->ptr2+msg_desc->length2 + OFU_GROUP_ACTION_BUCKET_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update current bucket details */
+  bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2+msg->desc.length1);
+  bucket->bucket_id = htonl(bucket_id);
+
+  msg->desc.length2 += OFU_GROUP_ACTION_BUCKET_LEN;
   return OFU_APPEND_BUCKET_SUCCESS;
 }
 
-
-  void
+void
 ofu_end_appending_buckets_to_group(struct of_msg *msg,
-    uint8_t *starting_location,
-    uint16_t *length_of_bucket)
+                                   uint8_t *starting_location,
+                                   uint16_t *length_of_bucket)
+{
+   struct of_msg_descriptor *msg_desc;
+   struct ofp_bucket *bucket;
+   uint16_t  bucket_len,roundup_bytes;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+   cntlr_assert(msg != NULL);
+   msg_desc = &msg->desc;
+
+   /*Update last bucket length value */
+   bucket=(struct ofp_bucket *) (msg_desc->ptr2 + msg->desc.length2 - (msg->desc.length3 + OFU_GROUP_ACTION_BUCKET_LEN));
+   bucket_len = OFU_GROUP_ACTION_BUCKET_LEN+msg->desc.length3+msg->desc.length1;
+   roundup_bytes = ROUND_UP(bucket_len);
+   memset(((uint8_t*)bucket + bucket_len),0,roundup_bytes);
+   bucket->len=htons(bucket_len + roundup_bytes);
+   /*Update actions len in the last bucket */
+   bucket->action_list_len = htons(msg->desc.length3);
+
+   starting_location=msg->desc.ptr2;
+  *length_of_bucket = msg->desc.length2 + roundup_bytes + msg->desc.length1;
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d length_of_buckets=%d",__FUNCTION__,__LINE__,*length_of_bucket);
+}
+
+/*msg ptr1 and length1 is using for bucket proprieites in OF buffer management
+  beucause ptr2,ptr3 are already managed by buckets and actions */
+void
+ofu_start_attach_bucket_properties (struct of_msg *msg)
 {
   struct of_msg_descriptor *msg_desc;
 
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
   cntlr_assert(msg != NULL);
   msg_desc = &msg->desc;
 
-  starting_location=msg->desc.ptr2;
-  *length_of_bucket = msg->desc.length1 + msg->desc.length2;
-  msg->desc.data_len += msg->desc.length1;
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"msg->desc.ptr1 %p length1 %d msg->desc.ptr2 %p msg->desc.length2 %d msgdec.datalen %d ",msg->desc.ptr1, msg->desc.length1, msg->desc.ptr2, msg->desc.length2, msg->desc.data_len);
+  msg->desc.ptr1    = msg_desc->ptr2 + msg_desc->length2;
+  msg->desc.length1 = 0;
+
+  return;
 }
 
-  void
+int32_t
+ofu_attach_weight_prop_to_bucket(struct of_msg *msg,
+                                 uint16_t weight)
+{
+  struct of_msg_descriptor *msg_desc;
+  struct ofp_group_bucket_prop_weight *weight_prop;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
+  cntlr_assert(msg != NULL);
+  msg_desc = &msg->desc;
+
+  if( (msg_desc->ptr1+msg_desc->length1 + OFU_GROUP_BUCKET_PROP_WEIGHT_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update wight properity details */
+  weight_prop=(struct ofp_group_bucket_prop_weight *) (msg_desc->ptr1 + msg->desc.length1);
+  weight_prop->type   = htons(OFPGBPT_WEIGHT);
+  weight_prop->length = htons(OFU_GROUP_BUCKET_PROP_WEIGHT_LEN);
+  weight_prop->weight = htons(weight);
+  msg->desc.length1 += OFU_GROUP_BUCKET_PROP_WEIGHT_LEN;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
+  return OFU_APPEND_BUCKET_SUCCESS;
+}
+
+int32_t
+ofu_attach_watch_port_prop_to_bucket(struct of_msg *msg,
+                                     uint32_t watch_port)
+{
+  struct of_msg_descriptor *msg_desc;
+  struct ofp_group_bucket_prop_watch *watch_prop;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
+  cntlr_assert(msg != NULL);
+  msg_desc = &msg->desc;
+
+  if( (msg_desc->ptr1+msg_desc->length1 + OFU_GROUP_BUCKET_PROP_WATCH_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update watch port details */
+  watch_prop=(struct ofp_group_bucket_prop_weight *) (msg_desc->ptr1 + msg->desc.length1);
+  watch_prop->type   = htons(OFPGBPT_WATCH_PORT);
+  watch_prop->length = htons(OFU_GROUP_BUCKET_PROP_WATCH_LEN);
+  watch_prop->watch  = htonl(watch_port);
+  msg->desc.length1 += OFU_GROUP_BUCKET_PROP_WATCH_LEN;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
+  return OFU_APPEND_BUCKET_SUCCESS;
+}
+
+int32_t
+ofu_attach_watch_group_prop_to_bucket(struct of_msg *msg,
+                                     uint32_t watch_group)
+{
+  struct of_msg_descriptor *msg_desc;
+  struct ofp_group_bucket_prop_watch *watch_prop;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d ",__FUNCTION__,__LINE__);
+  cntlr_assert(msg != NULL);
+  msg_desc = &msg->desc;
+
+  if( (msg_desc->ptr1+msg_desc->length1 + OFU_GROUP_BUCKET_PROP_WATCH_LEN) >
+      (msg->desc.start_of_data + msg_desc->buffer_len)   )
+  {
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d :Length of buffer is not sufficient to add data\r\n",
+        __FUNCTION__,__LINE__);
+    return OFU_NO_ROOM_IN_BUFFER;
+  }
+
+  /*Update watch group details */
+  watch_prop=(struct ofp_group_bucket_prop_weight *) (msg_desc->ptr1 + msg->desc.length1);
+  watch_prop->type   = htons(OFPGBPT_WATCH_GROUP);
+  watch_prop->length = htons(OFU_GROUP_BUCKET_PROP_WATCH_LEN);
+  watch_prop->watch  = htonl(watch_group);
+  msg->desc.length1 += OFU_GROUP_BUCKET_PROP_WATCH_LEN;
+
+  return OFU_APPEND_BUCKET_SUCCESS;
+}
+
+void
+ofu_end_attach_bucket_properties(struct of_msg *msg,
+                                  uint8_t  *starting_location,
+                                  uint16_t *length_of_prop)
+{
+  struct of_msg_descriptor *msg_desc;
+
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d",__FUNCTION__,__LINE__);
+  cntlr_assert(msg != NULL);
+  msg_desc = &msg->desc;
+
+  msg->desc.data_len += msg->desc.length1;
+
+  starting_location = msg->desc.ptr1;
+  *length_of_prop    = msg->desc.length1;
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d length_of_prop=%d",__FUNCTION__,__LINE__, *length_of_prop);
+}
+
+
+void
 ofu_start_appending_bands_to_meter(struct of_msg *msg)
 {
   struct of_msg_descriptor *msg_desc;

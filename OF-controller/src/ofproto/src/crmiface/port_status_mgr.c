@@ -138,6 +138,7 @@ int32_t psm_register_dprm_port_events()
     OF_LOG_MSG(OF_LOG_CRM, OF_LOG_DEBUG, " Registration to receive DPRM Port Notifications is successful.");
     return DPRM_SUCCESS;
   }
+  return ret_val;
 }
 /**********************************************************************************************************/
 int32_t psm_unregister_dprm_port_events()

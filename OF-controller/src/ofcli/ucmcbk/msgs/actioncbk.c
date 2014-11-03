@@ -125,7 +125,7 @@ int32_t of_action_appl_ucmcbk_init (void)
 {
 	int32_t return_value;
 
-	return_value=cm_register_app_callbacks ( CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_ACTION_APPL_ID,
+	return_value=cm_register_app_callbacks ( CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_ACTION_APPL_ID,
 			&of_action_ucm_callbacks);
 	if(return_value != OF_SUCCESS)
 	{
@@ -234,12 +234,13 @@ int32_t of_action_addrec (void * config_trans_p,
 		return OF_FAILURE;
 	}
 
-	if ((of_action_ucm_set_mand_params (mand_iv_pairs,&group_info, &bucket_info, action_info, &of_action_result)) !=
+	if ((of_action_ucm_set_mand_params (mand_iv_pairs, &group_info, &bucket_info, action_info, &of_action_result)) !=
 			OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
 		fill_app_result_struct (&of_action_result, NULL, CM_GLU_SET_MAND_PARAM_FAILED);
 		*result_pp=of_action_result;
+                of_free(action_info);
 		return OF_FAILURE;
 	}
 
@@ -248,29 +249,35 @@ int32_t of_action_addrec (void * config_trans_p,
 	{
 		CM_CBK_DEBUG_PRINT ("Validate Optional Parameters Failed");
 		//fill_app_result_struct (&of_action_result, NULL, CM_GLU_VALIDATE_OPT_PARAM_FAILED);
+		of_free(action_info);
 		*result_pp =of_action_result;
 		return OF_FAILURE;
 	}
 
-	return_value =of_action_ucm_set_opt_params (opt_iv_pairs, action_info, &of_action_result);
+	return_value = of_action_ucm_set_opt_params (opt_iv_pairs, action_info, &of_action_result);
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Optional Parameters Failed");
 
 		fill_app_result_struct (&of_action_result, NULL, CM_GLU_SET_OPT_PARAM_FAILED);
 		*result_pp =of_action_result;
+                of_free(action_info);
 		return OF_FAILURE;
 	}
 
-	return_value =of_register_action_to_bucket(trans_rec->datapath_handle,action_info,group_info.group_id, bucket_info.bucket_id);
+        return_value = of_frame_and_send_add_action_info (trans_rec->datapath_handle, 
+                                             &group_info, &bucket_info, action_info);
+ 
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Action addition to group %d failed", action_info->type);
 		fill_app_result_struct (&of_action_result, NULL, CM_GLU_ACTION_ADD_FAILED);
 		*result_pp =of_action_result;
+                of_free(action_info);
 		return OF_FAILURE;
 	}
 
+        of_free(action_info);
 	return OF_SUCCESS;
 }
 
@@ -315,7 +322,7 @@ int32_t of_action_setrec (void * config_trans_p,
 	}
 
 #endif 
-	return OF_FAILURE;
+	return OF_SUCCESS;
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -355,7 +362,7 @@ int32_t of_action_delrec (void * config_trans_p,
 		return OF_FAILURE;
 	}
 
-	return_value=of_group_unregister_bucket(trans_rec->datapath_handle,group_info.group_id, bucket_info.bucket_id);
+	//return_value=of_group_unregister_bucket(trans_rec->datapath_handle,group_info.group_id, bucket_info.bucket_id);
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Action does not exist with id %d",action_info.type);

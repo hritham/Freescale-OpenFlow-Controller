@@ -41,13 +41,15 @@ int32_t UCMDPJECopyIvPairArrayToBuffer(struct cm_array_of_iv_pairs *pIvPairAry,c
   int32_t uiNvCnt = 0;
   uint32_t  uiLen = 0;
 
+  if (pIvPairAry == NULL)
+    return OF_FAILURE;
   of_mbuf_put_32(pUCMTempRespBuf, pIvPairAry->count_ui);
   pUCMTempRespBuf +=4;
   cntrlrucm_debugmsg("count_ui=%d",pIvPairAry->count_ui);
 
   for (uiNvCnt = 0, uiLen = 0;uiNvCnt < pIvPairAry->count_ui;uiNvCnt++,pUCMTempRespBuf += uiLen,*puiLen+=uiLen,uiLen=0)
   {
-      if (UCMDPJECopyIvPairToBuffer(&pIvPairAry->iv_pairs[uiNvCnt], pUCMTempRespBuf,&uiLen) != OF_SUCCESS)
+      if (UCMDPJECopyIvPairToBuffer(&pIvPairAry->iv_pairs[uiNvCnt], pUCMTempRespBuf, &uiLen) != OF_SUCCESS)
       {
          cntrlrucm_debugmsg("Copy Name Value Pairs into Buffer Failed");
          return OF_FAILURE;

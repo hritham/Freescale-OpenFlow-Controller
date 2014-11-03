@@ -42,6 +42,7 @@
 #include "cntlr_xtn.h"
 #include "cntlr_event.h"
 #include "dprmldef.h"
+#include "tmrldef.h"
 #include "dll.h"
 #include "pktmbuf.h"
 #include "fsl_ext.h"
@@ -75,19 +76,34 @@
 #define OF_READ_ASYNC_MSG(channel,msg_id,msg_hdr)  \
   if(p_channel->msg_state != OF_CHN_RCVD_COMPLETE_MSG)\
 {\
-  if(channel->auxiliary_id == OF_TRNSPRT_MAIN_CONN_ID)\
-    channel->uiKeepAliveCount = 0; \
   if(of_alloc_and_read_async_message(channel,channel->datapath->domain,\
         &channel->datapath->domain->msg_type_mem_primitive[msg_id],\
         msg_hdr) == OF_FAILURE)\
   {\
-    status = OF_FAILURE;\
     break;\
   }\
   if(p_channel->msg_state == OF_CHN_WAITING_FOR_COMPLETE_MSG)\
   break;\
 }
 
+
+#define OF_READ_COMPLETE_MSG(channel,p_msg_hdr)  \
+{\
+  if(channel->msg_state != OF_CHN_RCVD_COMPLETE_MSG)\
+  {\
+    retval = of_alloc_and_read_message_from_dp(channel, p_msg_hdr);\
+    if(retval == OF_FAILURE)\
+    {\
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in alloc message data");\
+      return;\
+    }\
+    if(channel->msg_state == OF_CHN_WAITING_FOR_COMPLETE_MSG)\
+      return;\
+  }\
+}
+
+#define OF_MSG_MULTIPART_DATA_OFFSET(p_channel) ((p_channel->msg_buf->desc.start_of_data) + sizeof(struct ofp_multipart_reply))   
+ 
 #define MATCHFILED_PADDING(length, lengthwithpadding)\
   if( (length %8) == 0)\
 lengthwithpadding = length;\
@@ -111,21 +127,16 @@ typedef void (*cntlr_msg_cbk_fn)(cntlr_channel_info_t       *channel,
 /* TYPEDEF_END    *******************************************************/
 
 /* PROTOTYPE_START   ****************************************************/
-extern   inline int32_t cntlr_send_msg_to_dp(struct of_msg               *msg,
-    struct dprm_datapath_entry* datapath,
-    cntlr_conn_table_t         *conn_table,
-    cntlr_conn_node_saferef_t  *conn_safe_ref,
-    void                       *callback_fn,
-    void                       *clbk_arg1,
-    void                       *clbk_arg2);
-
-
 int32_t of_flush_msg_buf(cntlr_channel_info_t     *channel, uint16_t length);
 
 int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow_stats_p,
     uint32_t remaining_length);
+
+int32_t of_bind_stats_frame_respone(char *msg, struct ofi_bind_entry_info  *bind_stats_p, uint32_t remaining_length);
+
 int32_t of_frame_instruction_response(char *msg, struct ofi_instruction **instruction_entry_pp, 
     uint32_t *length);
+int32_t of_frame_match_field_response(char *msg, struct ofi_match_field **match_field_entry_pp, uint32_t *length);
 extern void inform_event_to_app(struct dprm_datapath_entry *data_path,
     uint8_t                     event_type,
     void                       *event_info1,
@@ -737,8 +748,7 @@ int32_t CNTLR_PKTPROC_FUNC of_alloc_and_read_async_message(cntlr_channel_info_t 
                   {
                      int32_t flags=0;
                      struct pkt_mbuf *mbuf = NULL;
-
-                     of_alloc_pkt_mbuf_and_set_of_msg(mbuf, channel->msg_buf,OFPT_PACKET_IN, ntohs(msg_hdr_p->length),flags, status);
+                     of_alloc_pkt_mbuf_and_set_of_msg(mbuf, channel->msg_buf,OFPT_PACKET_IN, (ntohs(msg_hdr_p->length)- sizeof( struct ofp_packet_in)),flags, status);
                      if(status == FALSE)
                      {
                         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR, "pkt_mbuf_alloc() failed");
@@ -965,18 +975,63 @@ of_msg_not_supported(cntlr_channel_info_t       *p_channel,
   of_flush_msg_buf(p_channel, ntohs(p_msg_hdr->length));
 }
 
-void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t       *p_channel,
-    struct dprm_datapath_entry *p_datapath,
-    struct ofp_header          *p_msg_hdr)
+static inline void
+of_update_match_field_host_byte_order(uint8_t *dst_ptr,
+                                    uint8_t *src_ptr,
+                                    uint16_t length)
+{
+   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Match field len %d\n",length);
+   switch(length)
+   {
+       case 2: *(uint16_t *)dst_ptr = ntohs(*(uint16_t *)src_ptr);
+               printf("%s 2 %x %x\r\n",__FUNCTION__, *(uint16_t *)src_ptr,*(uint16_t *)dst_ptr);
+               break;
+       case 4: *(uint32_t *)dst_ptr = ntohl(*(uint32_t *)src_ptr);
+               printf("%s 4 %x %x\r\n",__FUNCTION__, *(uint32_t *)src_ptr,*(uint32_t *)dst_ptr);
+               break;
+       case 8: *(uint64_t *)dst_ptr = ntohll(*(uint64_t *)src_ptr);
+               printf("%s 8 %x %x\r\n",__FUNCTION__, *(uint64_t *)src_ptr,*(uint64_t *)dst_ptr);
+   }
+}
+
+inline void
+read_pipeline_fields(uint8_t *destination_oxms,
+                     uint8_t *source_oxms,
+                     uint16_t  length)
+{
+    uint32_t    hdr;
+    uint32_t    fldlen;
+    uint16_t    total_len;
+
+    while (length) {
+      hdr = ntohl(*(uint32_t *)source_oxms);
+      *(uint32_t *)destination_oxms = hdr;
+      destination_oxms +=4; source_oxms +=4; length -=4;
+
+      fldlen = OXM_LENGTH(hdr);
+      printf("oxm %x fld len %d\r\n",destination_oxms,fldlen);
+      if (OXM_HASMASK(hdr)) fldlen >>= 1;
+
+      of_update_match_field_host_byte_order(destination_oxms,source_oxms,fldlen);
+      destination_oxms +=fldlen; source_oxms +=fldlen; length -=fldlen;
+
+     if (OXM_HASMASK(hdr)) {
+         of_update_match_field_host_byte_order(destination_oxms,source_oxms,fldlen);
+         destination_oxms += fldlen; source_oxms += fldlen; length -= fldlen;
+     }
+   }
+}      
+
+void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t  *p_channel,
+                                             struct dprm_datapath_entry *p_datapath,
+                                             struct ofp_header          *p_msg_hdr)
 {
   struct ofp_packet_in  *pkt_in_msg_rcvd;
   struct ofl_packet_in   pkt_in_msg;
   struct ofp_match      *match_field; 
-  struct ttp_table_entry *ttp_tbl_info_p=NULL;
   uint16_t               pkt_offset;
   uint8_t         msg_id = (OFPT_PACKET_IN - OF_FIRST_ASYNC_MSG_TYPE_ID +1);
   int32_t         retval = OF_SUCCESS;
-  int32_t         status = OF_SUCCESS;
 
   do
   {
@@ -989,7 +1044,10 @@ void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t       *p_chann
     if(CNTLR_UNLIKELY(pkt_in_msg_rcvd->table_id == OFPTT_ALL))
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Not a usable Table ID = %d\r\n",__FUNCTION__,__LINE__,pkt_in_msg_rcvd->table_id);
-      status = OF_FAILURE;
+
+      /*  free the memory */
+      of_get_pkt_mbuf_by_of_msg_and_free(p_channel->msg_buf);
+
       break;
     }
 #if 0
@@ -997,28 +1055,30 @@ void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t       *p_chann
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Table(Id=%d) not registered for the domain\r\n",
           __FUNCTION__,__LINE__,pkt_in_msg_rcvd->table_id);
-      status = OF_FAILURE;
       break;
     }
 #endif
-    if(get_ttp_tbl_info(p_datapath->domain->ttp_name, pkt_in_msg_rcvd->table_id, &ttp_tbl_info_p)!=OF_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Table(Id=%d) not registered for the domain\r\n",
-          __FUNCTION__,__LINE__,pkt_in_msg_rcvd->table_id);
-      status = OF_FAILURE;
-      break;
-    }
-
     match_field = &pkt_in_msg_rcvd->match; 
     if(CNTLR_UNLIKELY(ntohs(match_field->type) != OFPMT_OXM))
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Unsupported match field type=%x received \r\n",
           __FUNCTION__,__LINE__,match_field->type);
-      status = OF_FAILURE;
+
+      /*  free the memory */
+      of_get_pkt_mbuf_by_of_msg_and_free(p_channel->msg_buf);
+
       break;
     }
     pkt_in_msg.match_fields_length = ntohs(match_field->length);
-    pkt_in_msg.match_fields        = (uint8_t*)&match_field->oxm_fields;
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Total Match field length=%d \r\n",
+          __FUNCTION__,__LINE__,pkt_in_msg.match_fields_length);
+
+#if 0 
+    read_pipeline_fields(pkt_in_msg.match_fields,
+                         (uint8_t*)&match_field->oxm_fields,
+                         pkt_in_msg.match_fields_length);
+#endif
+    pkt_in_msg.match_fields = (uint8_t*)&match_field->oxm_fields;
 
     /*Remember buffer_id so that application pass it back as a packet out*/
     pkt_in_msg.buffer_id  = ntohl(pkt_in_msg_rcvd->buffer_id);
@@ -1035,12 +1095,13 @@ void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t       *p_chann
     pkt_offset           = ntohs(pkt_in_msg_rcvd->header.length) - 
       (sizeof(struct ofp_packet_in) + ntohs(pkt_in_msg_rcvd->total_len));
 
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," PKT_OFFSET=%d pkt_in_msg_rcvd->total_len=%d",
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," PKT_OFFSET=%d pkt_len=%d",
         pkt_offset,ntohs(pkt_in_msg_rcvd->total_len));
     OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," table-id = %d",pkt_in_msg.table_id);
 
     pkt_in_msg.packet    = p_channel->msg_buf->desc.start_of_data + sizeof(struct ofp_packet_in)+pkt_offset; 
     pkt_in_msg.packet_length = ntohs(pkt_in_msg_rcvd->total_len);
+
 
 #if 0
     CNTLR_PKT_IN_DATA(p_datapath->dpid,pkt_in_msg);
@@ -1051,7 +1112,6 @@ void CNTLR_PKTPROC_FUNC of_handle_pkt_in_msg(cntlr_channel_info_t       *p_chann
     if(retval == OF_FAILURE)
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Failed to handover the packet in message to app\r\n",__FUNCTION__,__LINE__);
-      status = OF_FAILURE;
       break;
     }
 
@@ -1068,10 +1128,8 @@ void of_handle_flow_removed_event(cntlr_channel_info_t       *p_channel,
   struct  ofl_flow_removed  flow_removed_msg;
   struct  ofp_flow_removed *flow_removed_msg_read;
   struct  ofp_match         *match_field;
-  struct ttp_table_entry *ttp_tbl_info_p=NULL;
   uint8_t msg_id = (OFPT_FLOW_REMOVED - OF_FIRST_ASYNC_MSG_TYPE_ID +1);
   int32_t retval = OF_SUCCESS;
-  int32_t status = OF_SUCCESS;
 
   do
   {
@@ -1084,7 +1142,6 @@ void of_handle_flow_removed_event(cntlr_channel_info_t       *p_channel,
     if(CNTLR_UNLIKELY(flow_removed_msg.table_id == OFPTT_ALL))
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Not a usable Table ID = %d\r\n",__FUNCTION__,__LINE__,flow_removed_msg.table_id);
-      status = OF_FAILURE;
       break;
     }
 #if 0
@@ -1096,14 +1153,6 @@ void of_handle_flow_removed_event(cntlr_channel_info_t       *p_channel,
       break;
     }
 #endif
-    if(get_ttp_tbl_info(p_datapath->domain->ttp_name, flow_removed_msg.table_id, &ttp_tbl_info_p)!=OF_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d Table(Id=%d) not registered for the domain\r\n",
-          __FUNCTION__,__LINE__,flow_removed_msg.table_id);
-      status = OF_FAILURE;
-      break;
-    }
-
  
     /*Remember flow entry details of the flow removed*/
     flow_removed_msg.cookie        = ntohll(flow_removed_msg_read->cookie);
@@ -1131,7 +1180,6 @@ void of_handle_flow_removed_event(cntlr_channel_info_t       *p_channel,
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,
           "%s %d Failed to handover the flow removed message to app\r\n",__FUNCTION__,__LINE__);
-      status = OF_FAILURE;
       break;
     }
   }
@@ -1152,8 +1200,6 @@ void of_handle_experimenter_event(cntlr_channel_info_t       *p_channel,
                                   struct ofp_header          *p_msg_hdr)
 {
   uint8_t   msg_id = OF_ASYNC_MSG_EXPERIMENTER_EVENT;
-  int32_t   status = OF_SUCCESS;
- 
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered\r\n");
   do
@@ -1180,8 +1226,7 @@ void  of_handle_error_msg_event(cntlr_channel_info_t       *p_channel,
   cntlr_transactn_rec_t    *p_xtn_rec;
   uint8_t         msg_id = OF_ASYNC_MSG_ERROR_EVENT;
   int32_t         retval = OF_SUCCESS;
-  int32_t         status = OF_SUCCESS;
-  uint8_t         type, sub_type;
+  uint8_t         type=0, sub_type;
   struct fslx_multipart_request *fsl_req_msg;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered\r\n");
@@ -1484,12 +1529,11 @@ of_handle_port_status_msg_event(cntlr_channel_info_t       *p_channel,
     struct dprm_datapath_entry *p_datapath,
     struct ofp_header          *p_msg_hdr)
 {
-  struct ofl_port_status  port_status_msg;
+  struct ofl_port_status  port_status_msg = {};
   struct ofl_port_desc_info *port_info = &port_status_msg.port_info;
-  struct ofp_port *port_desc_read;
+  struct ofp_port *port_desc_read = NULL;
   uint8_t         msg_id = (OFPT_PORT_STATUS - OF_FIRST_ASYNC_MSG_TYPE_ID +1);
-  int32_t         status = OF_SUCCESS;
-
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered \r\n");
   do
   {
     OF_READ_ASYNC_MSG(p_channel,msg_id,p_msg_hdr);
@@ -1517,6 +1561,7 @@ of_handle_port_status_msg_event(cntlr_channel_info_t       *p_channel,
   while(0);
   if(CNTLR_LIKELY(p_channel->msg_state == OF_CHN_RCVD_COMPLETE_MSG))
     OF_TRNSPRT_CHN_RESET_2_READ_NEW_MSG(p_channel);
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Exit \r\n");
 }
 
 
@@ -1527,11 +1572,8 @@ of_switch_info_response(cntlr_channel_info_t       *p_channel,
     cntlr_transactn_rec_t      *p_xtn_rec,
     uint8_t                     more_data)
 {
-  struct of_msg             *msg=NULL;
   struct ofp_desc    *swinfo_desc_read;
   struct ofi_switch_info  switch_info;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
   uint16_t   bytes_to_read;
   uint16_t   read_bytes=0;
@@ -1539,32 +1581,18 @@ of_switch_info_response(cntlr_channel_info_t       *p_channel,
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"entered");
   bytes_to_read=ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply);
 
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"bytes_to_read = %d \r\n",bytes_to_read);
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"bytes_to_read = %d",bytes_to_read);
 
-  /* Allocate requried message buffer required to read the switch information*/
-  msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_desc));
-  if(msg == NULL)
+
+  swinfo_desc_read = (struct ofp_desc *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+
+  if( swinfo_desc_read == NULL )
   {
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed -of_switch_info_response \r\n");
-    if( of_drain_out_socket_buf(p_channel, ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply)) != OF_SUCCESS)
-      //    if(of_flush_msg_buf(p_channel, ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply)) != OF_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Flushing TCP Buufer failure, controller will not be able to read proper messages");
-    }
-    status = OF_FAILURE;
-    return;
+	  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading switch info");
+	  status = OF_FAILURE;
+	  return;
   }
-
-  swinfo_desc_read = (struct ofp_desc *)(msg->desc.start_of_data);    
-
-  retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)swinfo_desc_read,sizeof(struct ofp_desc),&len_rcvd);
-  if(retval != CNTLR_CONN_READ_SUCCESS)
-  {
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading switch info");
-    status = OF_FAILURE;
-    msg->desc.free_cbk(msg); 
-  }
-  read_bytes += len_rcvd;
+  read_bytes += (sizeof (struct ofp_desc));
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"bytes_to_read = %d read_bytes=%d \r\n",bytes_to_read,read_bytes);
 
@@ -1583,7 +1611,7 @@ of_switch_info_response(cntlr_channel_info_t       *p_channel,
   if (status == OF_SUCCESS)
   {
     ((of_switch_info_cbk_fn)(p_xtn_rec->callback_fn))
-      (msg,
+      (NULL,
        p_datapath->datapath_handle,
        OF_RESPONSE_STATUS_SUCCESS,
        &switch_info);
@@ -1608,16 +1636,14 @@ of_handle_group_desc_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   group_no;
   uint32_t                   no_of_groups;
   uint8_t                    is_last_group;
-  struct of_msg             *msg;
   struct ofp_group_desc_stats    *group_desc_read;
   struct ofi_group_desc_info  group_desc;
-  uint16_t                   len_rcvd;
   int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
-  uint16_t   bytes_to_read;
+  uint16_t   bytes_to_read=0;
   uint16_t   read_bytes=0;
   uint16_t   length=0;
-  char buf[1024];
+  char *buf;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"entered");
   no_of_groups = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_group_desc_stats);
@@ -1630,48 +1656,43 @@ of_handle_group_desc_response(cntlr_channel_info_t       *p_channel,
     bytes_to_read=ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply);
   }
 
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Number of groups %d",no_of_groups);
+   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"bytes_to_read %d", bytes_to_read);
   for(group_no = 1;(( group_no <= no_of_groups) && (( bytes_to_read - read_bytes) >= sizeof(struct ofp_group_desc_stats)));
       group_no++)
   {
-    /* Allocate requried message buffer required to read one port description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_group_desc_stats));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - group description multipart reply, groupno %d",group_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    group_desc_read = (struct ofp_group_desc_stats *)(msg->desc.start_of_data);    
+    group_desc_read = (struct ofp_group_desc_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)group_desc_read,sizeof(struct ofp_group_desc_stats),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    if( group_desc_read == NULL )
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading port descption info for port %d ",
           group_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
-    read_bytes += len_rcvd;
+
+    read_bytes += (sizeof(struct ofp_group_desc_stats));
     group_desc.group_id    = ntohl(group_desc_read->group_id);
-    group_desc.group_type    = group_desc_read->type;
+    group_desc.group_type  = group_desc_read->type;
 
     length= ntohs(group_desc_read->length) - sizeof(struct ofp_group_desc_stats);
+  
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"group id %d type %d group length %d",  ntohl(group_desc_read->group_id), group_desc_read->type,  ntohs(group_desc_read->length) );
+
     if (length > 0)
     {
       /*Need to handle bucket and action infomration */
       /*skipping this information now... */
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf,length,&len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
+      buf=( char *) (OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);
+      if( buf == NULL )
       {
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading flow entry info for flow entry number %d",
             group_no);
         status = OF_FAILURE;
-        msg->desc.free_cbk(msg);
         break;
       }
-      retval= of_group_frame_response(buf, &group_desc, len_rcvd);
+      retval= of_group_frame_response(buf, &group_desc, length);
       if(retval != OF_SUCCESS)
       {
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"of_group_frame_response failed");
@@ -1679,16 +1700,18 @@ of_handle_group_desc_response(cntlr_channel_info_t       *p_channel,
         //		msg->desc.free_cbk(msg);
         //		break;
       }
-      read_bytes += len_rcvd;
+      read_bytes += length;
     }
 
 
-    if( (more_data != TRUE) && ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_group_desc_stats)))
+    /*if((more_data != TRUE) && (( group_no <= no_of_groups) || 
+                    ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_group_desc_stats))))*/
+   if ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_group_desc_stats))
       is_last_group = TRUE;
     else
       is_last_group = FALSE;
 
-    ((of_group_desc_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_group_desc_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -1723,16 +1746,13 @@ of_handle_group_stats_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   group_no;
   uint32_t                   no_of_groups;
   uint8_t                    is_last_group;
-  struct of_msg             *msg;
   struct ofp_group_stats    *group_stat_read;
   struct ofi_group_stat  group_stat;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
   uint16_t   bytes_to_read;
   uint16_t   read_bytes=0;
   uint16_t   length=0;
-  char buf[1024];
+  //char *buf=NULL;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered");
   no_of_groups = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_group_stats);
@@ -1748,26 +1768,15 @@ of_handle_group_stats_response(cntlr_channel_info_t       *p_channel,
   for(group_no = 1;(( group_no <= no_of_groups) && (( bytes_to_read - read_bytes) >= sizeof(struct ofp_group_stats)));
       group_no++)
   {
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_group_stats));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - group statistics multipart reply, groupno %d",group_no);
-      status = OF_FAILURE;
-      break;
-    }
-
-    group_stat_read = (struct ofp_group_stats *)(msg->desc.start_of_data);    
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)group_stat_read,sizeof(struct ofp_group_stats),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    group_stat_read = (struct ofp_group_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+    if( group_stat_read == NULL )
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading port descption info for groupid %d ",
           group_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
-    read_bytes += len_rcvd;
+    read_bytes += sizeof(struct ofp_group_stats);
     group_stat.group_id    = ntohl(group_stat_read->group_id);
     group_stat.ref_count    = ntohl(group_stat_read->ref_count);
     group_stat.duration_sec    = ntohl(group_stat_read->duration_sec);
@@ -1780,16 +1789,8 @@ of_handle_group_stats_response(cntlr_channel_info_t       *p_channel,
     {
       /*Need to handle bucket counter */
       /*skipping this information now... */
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf,length,&len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
-      {
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading flow entry info for flow entry number %d",
-            group_no);
-        status = OF_FAILURE;
-        msg->desc.free_cbk(msg);
-        break;
-      }
-      read_bytes += len_rcvd;
+   //   buf = (char  *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+      read_bytes += length;
     }
 
 
@@ -1798,7 +1799,7 @@ of_handle_group_stats_response(cntlr_channel_info_t       *p_channel,
     else
       is_last_group = FALSE;
 
-    ((of_group_stats_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_group_stats_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -1835,12 +1836,9 @@ of_handle_group_features_response(cntlr_channel_info_t       *p_channel,
 {
   uint32_t                   group_no;
   uint32_t                   no_of_groups;
-  uint8_t                    is_last_group;
-  struct of_msg             *msg;
   struct ofp_group_features    *group_feature_read;
   struct ofi_group_features_info  group_feature;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered");
@@ -1848,25 +1846,18 @@ of_handle_group_features_response(cntlr_channel_info_t       *p_channel,
 
   for(group_no = 1; group_no <= no_of_groups;group_no++)
   {
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_group_features));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - group features multipart reply, groupno %d",group_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    group_feature_read = (struct ofp_group_features *)(msg->desc.start_of_data);    
+    group_feature_read = (struct ofp_group_features *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)group_feature_read,sizeof(struct ofp_group_features),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    if( group_feature_read == NULL )
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading port descption info for port %d ",
           group_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
+
+    read_bytes += (sizeof(struct ofp_group_features));
     group_feature.types    = ntohl(group_feature_read->types);
     group_feature.capabilities    = ntohl(group_feature_read->capabilities);
     group_feature.max_groups[0]    = ntohl(group_feature_read->max_groups[0]);
@@ -1878,12 +1869,7 @@ of_handle_group_features_response(cntlr_channel_info_t       *p_channel,
     group_feature.actions[2]    = ntohl(group_feature_read->actions[2]);
     group_feature.actions[3]    = ntohl(group_feature_read->actions[3]);
 
-    if ((more_data != TRUE))
-      is_last_group = TRUE;
-    else
-      is_last_group = FALSE;
-
-    ((of_group_features_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_group_features_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -1918,16 +1904,14 @@ of_handle_meter_config_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   meter_no;
   uint32_t                   no_of_meters;
   uint8_t                    is_last_meter;
-  struct of_msg              *msg;
   struct ofp_meter_config    *meter_config_read;
   struct ofi_meter_rec_info  meter_config_local;
-  uint16_t                   len_rcvd;
   int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
   uint16_t   bytes_to_read;
   uint16_t   read_bytes=0;
   uint16_t   length=0;
-  char buf[1024];
+  char *buf;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"entered");
   no_of_meters = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_meter_config);
@@ -1942,48 +1926,29 @@ of_handle_meter_config_response(cntlr_channel_info_t       *p_channel,
 
   for(meter_no = 1;(( meter_no <= no_of_meters) && (( bytes_to_read - read_bytes) >= sizeof(struct ofp_meter_config)));meter_no++)
   {
-    /* Allocate requried message buffer required to read one meter description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_meter_config));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - meter config multipart reply, meterno %d",meter_no);
-      status = OF_FAILURE;
-      break;
-    }
+    meter_config_read = (struct ofp_meter_config *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-    meter_config_read = (struct ofp_meter_config *)(msg->desc.start_of_data);    
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)meter_config_read,sizeof(struct ofp_meter_config),&len_rcvd);
-
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    if( meter_config_read == NULL )
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading meter config info for meter %d ",meter_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
-    read_bytes += len_rcvd;
+    read_bytes += sizeof(struct ofp_meter_config);
     meter_config_local.meter_id = ntohl(meter_config_read->meter_id);
     meter_config_local.flags    = ntohs(meter_config_read->flags);
 
     length= ntohs(meter_config_read->length) - sizeof(struct ofp_meter_config);
     if (length > 0)
     {
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf,length,&len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
-      {
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading flow entry info for flow entry number %d",
-            meter_no);
-        status = OF_FAILURE;
-        msg->desc.free_cbk(msg);
-        break;
-      }
-      retval= of_meter_frame_response(buf, &meter_config_local, len_rcvd);
+      buf = (char *) (OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);
+
+      retval= of_meter_frame_response(buf, &meter_config_local, length);
       if(retval != OF_SUCCESS)
       {
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"of_meter_frame_response failed");
       }
-      read_bytes += len_rcvd;
+      read_bytes += length;
     }
 
     if( (more_data != TRUE) && ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_meter_config)))
@@ -1991,7 +1956,7 @@ of_handle_meter_config_response(cntlr_channel_info_t       *p_channel,
     else
       is_last_meter = FALSE;
 
-    ((of_meter_config_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_meter_config_cbk_fn)(p_xtn_rec->callback_fn))( NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -2026,16 +1991,13 @@ of_handle_meter_stats_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   meter_no;
   uint32_t                   no_of_meters;
   uint8_t                    is_last_meter;
-  struct of_msg             *msg;
   struct ofp_meter_stats    *meter_stats_read;
   struct ofi_meter_stats_info  meter_stats_local;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
   uint16_t   bytes_to_read;
   uint16_t   read_bytes=0;
   uint16_t   length=0;
-  char buf[1024];
+  char *buf;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered");
   no_of_meters = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_meter_stats);
@@ -2050,26 +2012,15 @@ of_handle_meter_stats_response(cntlr_channel_info_t       *p_channel,
 
   for(meter_no = 1;(( meter_no <= no_of_meters) && (( bytes_to_read - read_bytes) >= sizeof(struct ofp_meter_stats)));meter_no++)
   {
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_meter_stats));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - meter statistics multipart reply, meterno %d",meter_no);
-      status = OF_FAILURE;
-      break;
-    }
-
-    meter_stats_read = (struct ofp_meter_stats *)(msg->desc.start_of_data);    
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)meter_stats_read,sizeof(struct ofp_meter_stats),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    meter_stats_read = (struct ofp_meter_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+    if(   meter_stats_read == NULL)
     {
       OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading port descption info for meterid %d ",
           meter_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
-    read_bytes += len_rcvd;
+    read_bytes += sizeof (struct ofp_meter_stats);
     meter_stats_local.meter_id    = ntohl(meter_stats_read->meter_id);
     meter_stats_local.flow_count  = ntohl(meter_stats_read->flow_count);
     meter_stats_local.packet_in_count = ntohll(meter_stats_read->packet_in_count);
@@ -2080,16 +2031,16 @@ of_handle_meter_stats_response(cntlr_channel_info_t       *p_channel,
     length= ntohs(meter_stats_read->len) - sizeof(struct ofp_meter_stats);
     if (length > 0)
     {
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf,length,&len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
-      {
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading flow entry info for flow entry number %d",
-           meter_no);
-        status = OF_FAILURE;
-        msg->desc.free_cbk(msg);
-        break;
-      }
-      read_bytes += len_rcvd;
+	    buf = (char *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+	    if(buf  == NULL)
+	    {
+		    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading flow entry info for flow entry number %d",
+				    meter_no);
+		    status = OF_FAILURE;
+		    break;
+	    }
+            
+	    read_bytes += length;
     }
 
     if( (more_data != TRUE) && ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_meter_stats)))
@@ -2097,7 +2048,7 @@ of_handle_meter_stats_response(cntlr_channel_info_t       *p_channel,
     else
       is_last_meter = FALSE;
 
-    ((of_meter_stats_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_meter_stats_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -2132,34 +2083,24 @@ of_handle_meter_features_response(cntlr_channel_info_t       *p_channel,
     cntlr_transactn_rec_t      *p_xtn_rec,
     uint8_t                     more_data)
 {
-  struct of_msg             *msg;
   struct ofp_meter_features    *meter_features_read;
   struct ofi_meter_features_info meter_features_local;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered");
 
-  msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_meter_features));
-  if(msg == NULL)
-  {
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"message allocation failed - meter features multipart reply");
-    status = OF_FAILURE;
-    return ;
-  }
+   meter_features_read = (struct ofp_meter_features *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-  meter_features_read = (struct ofp_meter_features *)(msg->desc.start_of_data);    
-
-  retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t *)meter_features_read,sizeof(struct ofp_meter_features),&len_rcvd);
-  if(retval != CNTLR_CONN_READ_SUCCESS)
+  if(  meter_features_read == NULL )
   {
     OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading port descption info for port");
     status = OF_FAILURE;
-    msg->desc.free_cbk(msg);
     return;
   }
-  
+ 
+  read_bytes += (sizeof(struct ofp_meter_features ));
+ 
   meter_features_local.max_meter = ntohl(meter_features_read->max_meter);
   meter_features_local.band_types = ntohl(meter_features_read->band_types);
   meter_features_local.capabilities = ntohl(meter_features_read->capabilities);
@@ -2168,7 +2109,7 @@ of_handle_meter_features_response(cntlr_channel_info_t       *p_channel,
 
   if(status == OF_SUCCESS)
   {
-    ((of_meter_features_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_meter_features_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -2202,11 +2143,9 @@ of_handle_port_status_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   port_no;
   uint32_t                   no_of_ports;
   uint8_t                    is_last_port;
-  struct of_msg             *msg;
   struct ofp_port           *port_desc_read;
   struct ofl_port_desc_info  port_desc;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "entered");
@@ -2215,27 +2154,8 @@ of_handle_port_status_response(cntlr_channel_info_t       *p_channel,
 
   for(port_no = 1; port_no <= no_of_ports;port_no++)
   {
-    /* Allocate requried message buffer required to read one port description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_port));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d message allocation failed - port description multipart reply,portno %d\r\n",
-          __FUNCTION__,__LINE__,port_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    port_desc_read = (struct ofp_port *)(msg->desc.start_of_data);    
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)port_desc_read,sizeof(struct ofp_port),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading port descption info for port %d \r\n",
-          __FUNCTION__,__LINE__,port_no);
-      status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
-      break;
-    }
+    port_desc_read = (struct ofp_port *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
     strncpy(port_desc.name,port_desc_read->name,OFP_MAX_PORT_NAME_LEN);
     memcpy(port_desc.hw_addr,port_desc_read->hw_addr,OFP_ETH_ALEN);
@@ -2254,7 +2174,7 @@ of_handle_port_status_response(cntlr_channel_info_t       *p_channel,
     else
       is_last_port = FALSE;
 
-    ((of_port_desc_cbk_fn)(p_xtn_rec->callback_fn))(msg,
+    ((of_port_desc_cbk_fn)(p_xtn_rec->callback_fn))(NULL,
     controller_handle,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
@@ -2269,11 +2189,13 @@ of_handle_port_status_response(cntlr_channel_info_t       *p_channel,
        if ((p_channel->auxiliary_id == OF_TRNSPRT_MAIN_CONN_ID) && (p_channel->is_dp_ready != TRUE))
        {
           p_channel->is_dp_ready = TRUE;
+          //p_channel->datapath->is_dp_active = TRUE;
           inform_event_to_app(p_channel->datapath,
                 DP_READY_EVENT,NULL,NULL);
 
        }
     }
+     read_bytes += (sizeof(struct ofp_port));
   }
 
   if(status == OF_FAILURE)
@@ -2301,11 +2223,9 @@ of_handle_table_stats_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   table_no;
   uint32_t                   no_of_tables;
   uint8_t                    is_last_table;
-  struct of_msg             *msg;
-  struct ofp_table_stats  *table_stats_read;
+  struct ofp_table_stats  *table_stats_read=NULL;
   struct ofi_table_stats_info  table_stats;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
   no_of_tables = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_table_stats);
@@ -2317,25 +2237,14 @@ of_handle_table_stats_response(cntlr_channel_info_t       *p_channel,
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"%s %d response num of table %d\r\n",__FUNCTION__,__LINE__, no_of_tables);
   for(table_no = 1; table_no <= no_of_tables;table_no++)
   {
-    /* Allocate requried message buffer required to read one table description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_table_stats));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d message allocation failed - table description multipart reply,tableno %d\r\n",
-          __FUNCTION__,__LINE__,table_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    table_stats_read = (struct ofp_table_stats *)(msg->desc.start_of_data);    
+    table_stats_read = (struct ofp_table_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)table_stats_read,sizeof(struct ofp_table_stats),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    if( table_stats_read == NULL )
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading table descption info for table %d \r\n",
-          __FUNCTION__,__LINE__,table_no);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading table descption info for table %d",
+          table_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
 #if 0
@@ -2358,13 +2267,14 @@ of_handle_table_stats_response(cntlr_channel_info_t       *p_channel,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
     table_no,
-    msg,
+    NULL,
     p_xtn_rec->app_pvt_arg1,
     p_xtn_rec->app_pvt_arg2,
     OF_RESPONSE_STATUS_SUCCESS,
     &table_stats,
     is_last_table);
 #endif
+	read_bytes += sizeof(struct ofp_table_stats);
   }
 
   if(status == OF_FAILURE)
@@ -2397,17 +2307,15 @@ of_handle_flow_entry_stats_response(cntlr_channel_info_t       *p_channel,
   uint8_t                    is_last_flowentry;
   struct ofp_flow_stats     *flow_stats_read; 
   struct ofi_flow_entry_info  flow_stats;
-  struct of_msg             *msg;
-  uint16_t                   len_rcvd;
   int32_t                    retval = OF_SUCCESS;
   int32_t                    status = OF_SUCCESS;
   uint16_t   bytes_to_read=0;
   uint16_t   read_bytes=0;
   uint16_t   length=0;
-  char buf[1024];
+  char *buf;
 
 
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered \r\n");
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_INFO,"entered ");
   no_of_flowstats = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_flow_stats);
   if(no_of_flowstats ==0 )
   {
@@ -2417,7 +2325,7 @@ of_handle_flow_entry_stats_response(cntlr_channel_info_t       *p_channel,
   {
     bytes_to_read=ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply) ;
   }
-  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," bytes_to_read = %d  read_bytes =%d \r\n", bytes_to_read,read_bytes);
+  OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," bytes_to_read = %d  read_bytes =%d ", bytes_to_read,read_bytes);
 
 
   for(flowentry_no = 1; ((flowentry_no <= no_of_flowstats) && (( bytes_to_read - read_bytes) >= sizeof(struct ofp_flow_stats)));flowentry_no++)
@@ -2425,33 +2333,18 @@ of_handle_flow_entry_stats_response(cntlr_channel_info_t       *p_channel,
     memset(&flow_stats,0, sizeof(struct ofi_flow_entry_info));
     OF_LIST_INIT(flow_stats.match_field_list, NULL);
     OF_LIST_INIT(flow_stats.instruction_list, NULL);
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"bytes_to_read = %d  read_bytes =%d \r\n", bytes_to_read,read_bytes);
-    /* Allocate requried message buffer required to read one port description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_flow_stats));
-    if(msg == NULL)
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"bytes_to_read = %d  read_bytes =%d ", bytes_to_read,read_bytes);
+
+
+    flow_stats_read= (struct ofp_flow_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+    if(  flow_stats_read == NULL )
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," message allocation failed - flow entry stats failed, flow entry no: %d\r\n",flowentry_no);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading flow entry info for flow entry number %d ",flowentry_no);
       status = OF_FAILURE;
       break;
     }
+    read_bytes += (sizeof( struct ofp_flow_stats) - sizeof(struct ofp_match));
 
-    flow_stats_read= (struct ofp_flow_stats *)(msg->desc.start_of_data);    
-
-    /*Reading till byte count only, sizeof(struct ofp_flow_stats)-sizeof(struct ofp_match) = 48 bytes
-    * After that we will have TLV format fileds which will read individually*/
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)flow_stats_read, (sizeof(struct ofp_flow_stats)-sizeof(struct ofp_match)), &len_rcvd);
-
-    if(retval != CNTLR_CONN_READ_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in reading flow entry info for flow entry number %d \r\n",flowentry_no);
-      status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
-      break;
-    }
-    read_bytes += len_rcvd;
-
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"\r\n len_rcvd =%d",len_rcvd);
 
     flow_stats.table_id =flow_stats_read->table_id;        
     flow_stats.priority = ntohs(flow_stats_read->priority);        
@@ -2463,31 +2356,28 @@ of_handle_flow_entry_stats_response(cntlr_channel_info_t       *p_channel,
     flow_stats.packet_count = ntohll(flow_stats_read->packet_count);
     flow_stats.byte_count = ntohll(flow_stats_read->byte_count); 
 
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"table_id=%d alive_sec=%ld priority=%ld \r\n",flow_stats.table_id,flow_stats.alive_sec,flow_stats.priority);
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"table_id=%d alive_sec=%ld priority=%ld",flow_stats.table_id,flow_stats.alive_sec,flow_stats.priority);
 
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"\r\n flow_stats_read->length=%ld  len_rcvd =%d",flow_stats_read->length,len_rcvd);
     /*Now read the remaining part of the message which contains match field,
     * instruction, action ..etc */
-    length= ntohs(flow_stats_read->length) - len_rcvd;
+    length= ntohs(flow_stats_read->length) - (sizeof( struct ofp_flow_stats) - sizeof(struct ofp_match));
     if (length > 0 )
     {
-
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf,length,&len_rcvd);
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"\r\n length=%ld len_rcvd =%d", length,len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
+      buf = (char *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+      if( buf == NULL )
       {
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s:%d Error in reading flow entry info for flow entry number %d \r\n",
-            __FUNCTION__,__LINE__,flowentry_no);
+        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Error in reading flow entry info for flow entry number %d",
+           flowentry_no);
         status = OF_FAILURE;
-        msg->desc.free_cbk(msg); 
         break;
       }
-      retval= of_flow_stats_frame_respone(buf, &flow_stats, len_rcvd);
+      retval= of_flow_stats_frame_respone(buf, &flow_stats, length);
       if(retval != OF_SUCCESS)
       {
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"of_flow_stats_frame_respone failed");
       }
-      read_bytes += len_rcvd;
+      read_bytes += length;
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"read_bytes=%d length=%ld ",read_bytes, length);
     }
 
     if( (more_data != TRUE) && ((bytes_to_read - read_bytes ) <= sizeof(struct ofp_flow_stats) ))
@@ -2500,7 +2390,7 @@ of_handle_flow_entry_stats_response(cntlr_channel_info_t       *p_channel,
        p_datapath->domain->domain_handle,
        p_datapath->datapath_handle,
        flow_stats_read->table_id,
-       msg,
+       NULL,
        p_xtn_rec->app_pvt_arg1,
        p_xtn_rec->app_pvt_arg2,
        OF_RESPONSE_STATUS_SUCCESS,
@@ -2538,7 +2428,7 @@ of_handle_bind_entry_stats_response(cntlr_channel_info_t       *p_channel,
   struct fslx_bind_obj_info_reply      *bind_stats_read;
   struct ofi_bind_entry_info           bind_stats;
   struct of_msg                        *msg;
-  struct fslx_header                  *fsl_msg_hdr;
+  struct fslx_header                  *fsl_msg_hdr=NULL;
   uint16_t                             len_rcvd;
   int32_t                              retval = OF_SUCCESS;
   int32_t                              status = OF_SUCCESS;
@@ -2676,11 +2566,9 @@ of_handle_aggregate_stats_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   aggrstats_no;
   uint32_t                   no_of_aggrstats;
   uint8_t                    is_last_aggrstats;
-  struct of_msg             *msg;
   struct ofp_aggregate_stats_reply *aggr_stats_read; 
   struct ofi_aggregate_flow_stats aggr_stats;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
 
@@ -2691,25 +2579,14 @@ of_handle_aggregate_stats_response(cntlr_channel_info_t       *p_channel,
   }
   for(aggrstats_no = 1; aggrstats_no <= no_of_aggrstats;aggrstats_no++)
   {
-    /* Allocate requried message buffer required to read one port description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_aggregate_stats_reply));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s %d message allocation failed - aggregate stats fail for stats no: %d\r\n",
-          __FUNCTION__,__LINE__,aggrstats_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    aggr_stats_read= (struct ofp_aggregate_stats_reply *)(msg->desc.start_of_data);    
+    aggr_stats_read = (struct ofp_aggregate_stats_reply *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
 
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)aggr_stats_read,sizeof(struct ofp_aggregate_stats_reply),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    if( aggr_stats_read == NULL )
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"%s:%d Error in reading aggregate stats info for aggregate no %d \r\n",
-          __FUNCTION__,__LINE__,aggrstats_no);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Error in reading aggregate stats info for aggregate no %d ",
+          aggrstats_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
 
@@ -2728,12 +2605,13 @@ of_handle_aggregate_stats_response(cntlr_channel_info_t       *p_channel,
        p_datapath->domain->domain_handle,
        p_datapath->datapath_handle,
        aggrstats_no,// 0,  
-       msg,
+       NULL,
        p_xtn_rec->app_pvt_arg1,
        p_xtn_rec->app_pvt_arg2,
        OF_RESPONSE_STATUS_SUCCESS,
        &aggr_stats,
        is_last_aggrstats);
+       read_bytes += ( sizeof(struct ofp_aggregate_stats_reply));
   }
   if(status == OF_FAILURE)
   {
@@ -2763,12 +2641,10 @@ of_handle_port_stats_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   port_no;
   uint32_t                   no_of_ports;
   uint8_t                    is_last_port;
-  struct of_msg             *msg;
   struct ofp_port_stats  *port_stats_read;
   //struct ofp_port_stats  port_stats;
   struct ofi_port_stats_info  port_stats;
-  uint16_t                   len_rcvd;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
 
   no_of_ports = OF_MULTIPART_RPLY_MSG_NO_OF_DESC(p_msg_hdr,struct ofp_port_stats);
@@ -2779,26 +2655,12 @@ of_handle_port_stats_response(cntlr_channel_info_t       *p_channel,
 
   for(port_no = 1; port_no <= no_of_ports;port_no++)
   {
-    /* Allocate requried message buffer required to read one port description */
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_port_stats));
-    if(msg == NULL)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d message allocation failed - port description multipart reply,portno %d\r\n",
-          __FUNCTION__,__LINE__,port_no);
-      status = OF_FAILURE;
-      break;
-    }
 
-    port_stats_read = (struct ofp_port_stats *)(msg->desc.start_of_data);    
-    memset(port_stats_read, '\0', sizeof(struct ofp_port_stats));
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)port_stats_read,sizeof(struct ofp_port_stats),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
+    port_stats_read = (struct ofp_port_stats *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+    if(port_stats_read ==  NULL)
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading port descption info for port %d \r\n",
-          __FUNCTION__,__LINE__,port_no);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading port descption info for port %d",port_no);
       status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
       break;
     }
 #if 0
@@ -2841,13 +2703,14 @@ of_handle_port_stats_response(cntlr_channel_info_t       *p_channel,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
     port_no,
-    msg,
+    NULL,
     p_xtn_rec->app_pvt_arg1,
     p_xtn_rec->app_pvt_arg2,
     OF_RESPONSE_STATUS_SUCCESS,
     &port_stats,
     is_last_port);
 #endif
+    read_bytes += (sizeof(struct ofp_port_stats));
   }
 
   if(status == OF_FAILURE)
@@ -3218,43 +3081,26 @@ of_table_feature_response(cntlr_channel_info_t       *p_channel,
   uint32_t                   rec_len=0, RemTblLen;
   uint32_t                   rec_no=0;
   uint8_t                    is_last_rec;
-  struct of_msg             *msg;
   struct ofp_table_features *table_feature_read;
   struct ofi_table_features_info table_feature; 
-  uint16_t                   len_rcvd;
-  struct dprm_table_info oftable_info = {};
-  struct dprm_domain_entry   *p_dp_domain = p_datapath->domain;
-  int32_t                    retval = OF_SUCCESS;
+  uint16_t                   read_bytes=0;
   int32_t                    status = OF_SUCCESS;
-  uint64_t  table_handle;
-  char buf[4096];
+  char *buf=NULL;
 
   RemTblLen = (ntohs(p_msg_hdr->length) - sizeof(struct ofp_multipart_reply));
   while(RemTblLen >= sizeof (struct ofp_table_features))
   {
     /* Allocate requried message buffer required to read one port description */
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "RemTblLen=%d \r\n",RemTblLen);
-    msg = ofu_alloc_message(p_msg_hdr->type,sizeof(struct ofp_table_features));
-    if(msg == NULL)
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "RemTblLen=%d",RemTblLen);
+
+    table_feature_read = (struct ofp_table_features *)(OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);    
+    if( table_feature_read == NULL )
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s %d message allocation failed - table feature multipart reply,recno %d\r\n",
-          __FUNCTION__,__LINE__,rec_no);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Error in reading table features %d",  rec_no);
       status = OF_FAILURE;
       break;
     }
-
-    table_feature_read = (struct ofp_table_features*)(msg->desc.start_of_data);    
-
-    retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)table_feature_read ,sizeof(struct ofp_table_features),&len_rcvd);
-    if(retval != CNTLR_CONN_READ_SUCCESS)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading table features%d \r\n",
-          __FUNCTION__,__LINE__,rec_no);
-      status = OF_FAILURE;
-      msg->desc.free_cbk(msg); 
-      break;
-    }
-
+    read_bytes += sizeof(struct ofp_table_features);
     memset(&table_feature, 0, sizeof(struct ofi_table_features_info));
     strcpy(table_feature.name,table_feature_read->name); 
     table_feature.table_id	= table_feature_read->table_id;
@@ -3263,25 +3109,19 @@ of_table_feature_response(cntlr_channel_info_t       *p_channel,
     table_feature.metadata_match = ntohll(table_feature_read->metadata_match);	
     table_feature.max_entries = ntohl(table_feature_read->max_entries);
     rec_len = ntohs(table_feature_read->length);
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"rec_len=%d table_feature_read->length=%d \r\n",rec_len,ntohs(table_feature_read->length));
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"rec_len=%d table_feature_read->length=%d ",rec_len,ntohs(table_feature_read->length));
     
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"table_feature_read->name=%s table_feature_read->table_id=%d \r\n",table_feature_read->name,table_feature_read->table_id);
+    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"table_feature_read->name=%s table_feature_read->table_id=%d",table_feature_read->name,table_feature_read->table_id);
 
     if(rec_len  > sizeof(struct	ofp_table_features))
     {
-      retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)buf ,(rec_len-sizeof(struct ofp_table_features)), &len_rcvd);
-      if(retval != CNTLR_CONN_READ_SUCCESS)
-      {
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading table features%d \r\n",
-            __FUNCTION__,__LINE__,rec_no);
-        status = OF_FAILURE;
-        msg->desc.free_cbk(msg); 
-        break;
-      }
+	    buf = (char *) (OF_MSG_MULTIPART_DATA_OFFSET(p_channel) + read_bytes);
+	    read_bytes += (rec_len - sizeof(struct ofp_table_features));
+    	    ProcessTableFeatureProp((struct ofp_table_feature_prop_header* )buf, (rec_len - sizeof(struct ofp_table_features)), p_xtn_rec, &table_feature);
     }
     
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "len_rcvd=%d \r\n",len_rcvd);
-    ProcessTableFeatureProp(buf, rec_len, p_xtn_rec, &table_feature);
+//    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "len_rcvd=%d \r\n",len_rcvd);
+    //ProcessTableFeatureProp((struct ofp_table_feature_prop_header* )buf, rec_len, p_xtn_rec, &table_feature);
 
     if(RemTblLen > rec_len) 
       RemTblLen -= rec_len; 
@@ -3297,7 +3137,7 @@ of_table_feature_response(cntlr_channel_info_t       *p_channel,
     p_datapath->domain->domain_handle,
     p_datapath->datapath_handle,
     table_feature.table_id,
-    msg,
+    NULL,
     p_xtn_rec->app_pvt_arg1,
     p_xtn_rec->app_pvt_arg2,
     OF_RESPONSE_STATUS_SUCCESS,
@@ -3331,12 +3171,7 @@ of_process_role_replymsg(cntlr_channel_info_t       *p_channel,
 {
 	struct ofp_role_request  *of_role_reply=NULL;
 	cntlr_transactn_rec_t    *p_xtn_rec=NULL;
-	uint8_t                  more_data = FALSE;
-	uint16_t                 len_rcvd;
 	int32_t                  retval = OF_SUCCESS;
-	struct of_msg      *msg=NULL; 
-
-
 
 	if( p_msg_hdr->type  != OFPT_ROLE_REPLY )
 	{
@@ -3399,11 +3234,7 @@ of_process_async_replymsg(cntlr_channel_info_t       *p_channel,
 {
 	struct ofp_async_config      *of_async_config_msg=NULL;
 	cntlr_transactn_rec_t    *p_xtn_rec=NULL;
-	uint8_t                  more_data = FALSE;
-	uint16_t                 len_rcvd;
 	int32_t                  retval = OF_SUCCESS;
-	struct of_msg      *msg=NULL; 
-
 
 	OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ALL, "%s:%d  \r\n", __FUNCTION__,__LINE__);
 
@@ -3428,8 +3259,6 @@ of_process_async_replymsg(cntlr_channel_info_t       *p_channel,
 	of_async_config_msg = (struct ofp_async_config  *)(p_channel->msg_buf->desc.start_of_data);
 
 
-
-
 	/* Get record of the transaction to which this response received*/
 	retval = cntlr_get_xtn_details(ntohl(p_msg_hdr->xid),
 			p_datapath->datapath_id,
@@ -3439,8 +3268,6 @@ of_process_async_replymsg(cntlr_channel_info_t       *p_channel,
 		OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Invalid Transaction ID%d \r\n", __FUNCTION__,__LINE__,p_msg_hdr->xid);
 		return;
 	}
-
-
 
 	if(p_xtn_rec->callback_fn!=NULL){
 		OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ALL,"calling callback....\n");
@@ -3469,9 +3296,7 @@ of_process_multipart_replymsg(cntlr_channel_info_t       *p_channel,
   of_multipart_reply_hdr_t multipart_hdr;
   cntlr_transactn_rec_t    *p_xtn_rec;
   uint8_t                  more_data = FALSE;
-  uint16_t                 len_rcvd;
   int32_t                  retval = OF_SUCCESS;
-
 
   /* Get record of the transaction to which this response received*/
   if( p_msg_hdr->type  == OFPT_MULTIPART_REPLY )
@@ -3481,17 +3306,19 @@ of_process_multipart_replymsg(cntlr_channel_info_t       *p_channel,
         &p_xtn_rec);
     if(retval == OF_FAILURE)
     {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Invalid Transaction ID%d \r\n", __FUNCTION__,__LINE__,p_msg_hdr->xid);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Invalid Transaction ID%d ",p_msg_hdr->xid);
+      if( OF_SUCCESS != (of_drain_out_socket_buf(p_channel, ntohs(p_msg_hdr->length) - sizeof(struct ofp_header))))
+      {
+	OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "[ERROR] Flushing %d bytes from TCP Buffer., controller will not be able to read proper messages\r\n",
+	    (ntohs(p_msg_hdr->length) - sizeof(struct ofp_header)) );
+      }
       return;
     }
     sleep(1); //Added to avoid sending response before finishing the multipart request processed by UCM.
   }
-  retval = cntlr_read_msg_recvd_from_dp(p_channel,(uint8_t*)&multipart_hdr,sizeof(of_multipart_reply_hdr_t),&len_rcvd);
-  if(retval != CNTLR_CONN_READ_SUCCESS)
-  {
-    OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Error in reading multipart heder \r\n", __FUNCTION__,__LINE__);
-    return;
-  }
+
+  OF_READ_COMPLETE_MSG(p_channel,p_msg_hdr);
+  memcpy((void*)&multipart_hdr, (void*)( p_channel->msg_buf->desc.start_of_data + sizeof(struct ofp_header)), sizeof(of_multipart_reply_hdr_t));
 
   switch(ntohs(multipart_hdr.type))
   {
@@ -3615,12 +3442,9 @@ of_process_multipart_replymsg(cntlr_channel_info_t       *p_channel,
           (more_data = (ntohs(multipart_hdr.flags) == OFPMPF_REPLY_MORE)));
 
     default:
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"%s:%d Invalid Multipart Msg reply type %d \r\n",
-          __FUNCTION__,__LINE__,multipart_hdr.type);
+      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"Invalid Multipart Msg reply type %d",
+          multipart_hdr.type);
   }
-
-  if(p_channel->keep_alive_state == OF_TRNSPRT_CHN_CONN_KEEP_ALIVE_MSG_SENT)
-    p_channel->keep_alive_state = p_channel->keep_alive_state|OF_TRNSPRT_CHN_CONN_KEEP_ALIVE_MSG_RESP_RCVD;
 
   OF_TRNSPRT_CHN_RESET_2_READ_NEW_MSG(p_channel);
 
@@ -3636,7 +3460,7 @@ of_process_multipart_replymsg(cntlr_channel_info_t       *p_channel,
     timer_restart_tmr(NULL,&p_xtn_rec->timer_saferef,
         CNTLR_NOT_PEIRODIC_TIMER,
         CNTLR_XTN_NODE_TIMEOUT,
-        cntlr_xtn_recrod_cleanup_func,
+        (tmr_cbk_func)cntlr_xtn_recrod_cleanup_func,
         (void *)p_xtn_rec,
         NULL);
   }
@@ -3844,8 +3668,13 @@ inline int32_t CNTLR_PKTPROC_FUNC of_process_dp_message(cntlr_channel_info_t *ch
     return OF_FAILURE;
   }
 
-  if( (msg_handle != NULL) && (channel->is_chn_added_to_dp) )
+  //if( (msg_handle != NULL) && (channel->is_chn_added_to_dp) )
+  if (msg_handle != NULL)
+  {
+    if(channel->keep_alive_state == OF_TRNSPRT_CHN_CONN_KEEP_ALIVE_MSG_SENT)
+      channel->keep_alive_state = channel->keep_alive_state|OF_TRNSPRT_CHN_CONN_KEEP_ALIVE_MSG_RESP_RCVD;
     msg_handle(channel,channel->datapath,p_msg_hdr);
+  }
 
   return OF_SUCCESS;
 }
@@ -3857,7 +3686,6 @@ int32_t of_flush_msg_buf(cntlr_channel_info_t  *channel, uint16_t length)
 {
   uint8_t     *buffer = NULL;
   uint16_t	read_len = 0;
-  int32_t	retval = 0;
 
   buffer = (uint8_t*)calloc(1,length);
   if(buffer == NULL)
@@ -3868,7 +3696,7 @@ int32_t of_flush_msg_buf(cntlr_channel_info_t  *channel, uint16_t length)
   }
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"%s %d Flushing message buffer of length:%d.............\r\n",__FUNCTION__,__LINE__,length);
-  retval = cntlr_read_msg_recvd_from_dp(channel, buffer, length, &read_len);
+  cntlr_read_msg_recvd_from_dp(channel, buffer, length, &read_len);
   if((length - read_len) != 0)
   {
     OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR, "Doesn't read full lentgth, critical .............\r\n",__FUNCTION__,__LINE__);
@@ -3958,7 +3786,7 @@ int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow
   struct ofi_match_field *match_entry_p; 
   struct ofp_match *match_field_p;
   
-  uint32_t actions_len=0;
+  uint32_t actions_len=0, total_read_len=0;
   uint32_t matchfield_len=0;
   uint32_t matchfield_total_len=0;
   uint32_t matchfield_padding_len=0;
@@ -3995,6 +3823,7 @@ int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow
   
   msg += matchfield_padding_len;
   remaining_length -= matchfield_total_len;
+  total_read_len += matchfield_total_len;
 
   /*Now read the instruction, which has the action init */
 
@@ -4008,6 +3837,7 @@ int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow
     }
     msg += length;
     remaining_length -= length;
+    total_read_len += length;
 
     OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," instruction length %d remaining_length %d \r\n", length,remaining_length);
 
@@ -4029,6 +3859,7 @@ int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow
 
         actions_len -= length;  
         remaining_length -= length;
+        total_read_len += length;
         msg += length;
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"actions_len=%d remaining_length=%d \r\n", actions_len,remaining_length)
       }
@@ -4040,6 +3871,8 @@ int32_t of_flow_stats_frame_respone(char *msg, struct ofi_flow_entry_info  *flow
     }
     OF_APPEND_NODE_TO_LIST(flow_stats_p->instruction_list, instruction_entry_p,OF_INSTRUCTION_LISTNODE_OFFSET);
   }
+  /*update with total read length */
+  remaining_length = total_read_len;
   return OF_SUCCESS;
 }
 
@@ -4142,7 +3975,6 @@ int32_t of_frame_match_field_response(char *msg, struct ofi_match_field **match_
   struct ofi_match_field *match_entry_p; 
   struct oxm_match_field *match_read_p;
   uint8_t is_mask_set;
-  uint16_t class;
 
   match_read_p  =(struct oxm_match_field *)msg;
   match_entry_p =(struct ofi_match_field *)calloc(1,sizeof(struct ofi_match_field));
@@ -4150,7 +3982,7 @@ int32_t of_frame_match_field_response(char *msg, struct ofi_match_field **match_
   match_entry_p->field_type = match_read_p->field_type >>1;
   match_entry_p->field_len = match_read_p->length;
 
-  OF_LOG_MSG(OF_LOG_MOD,OF_LOG_DEBUG,"field len value  is %d class %d",match_entry_p->field_len,class);
+  OF_LOG_MSG(OF_LOG_MOD,OF_LOG_DEBUG,"field len value  is %d class %d", match_entry_p->field_len, match_entry_p->match_class);
 
   is_mask_set = (match_read_p->field_type & (0x01))?1:0;
 
@@ -4511,10 +4343,8 @@ int32_t of_frame_instruction_response(char *msg, struct ofi_instruction **instru
 
     case OFPIT_APPLY_ACTIONS:
       {
-        struct ofp_instruction_actions *instruction_apply_action_read_p;
         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPIT_APPLY_ACTIONS:");
         OF_LIST_INIT(instruction_entry_p->action_list, NULL);
-        instruction_apply_action_read_p = (struct ofp_instruction_actions *)msg;
         *length +=  sizeof(struct ofp_instruction_actions);
         break;
       }

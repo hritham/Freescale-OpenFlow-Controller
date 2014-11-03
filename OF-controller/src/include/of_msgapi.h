@@ -707,10 +707,7 @@ of_create_delete_flow_entries_msg_of_table_with_strict_match(struct of_msg *msg,
  * \param [in] datapath_handle -  Handle of the data_path to add group.
  * \param [in] group_id        -  ID of the group to add.
  * \param [in] group_type      -  Type of group(All(OFPGT_ALL)/Select(OFPGT_SELECT)/Fast Fail over((OFGT_FF)) to add
- * \param [in] clbk_command_arg1 - Application private information, arg1.In case of any errors,same will be passed to the\n
- *                                 error callback function that registered by the applications to receive errors.
- * \param [in] clbk_command_arg2 - Application private information, arg2.In case of any errors,same will be passed to the\n
- *                                 error callback function that registered by the applications to receive errors.
+ * \param [in] bucket_list_len -  Length of the buckets including its actions attached to the group
  * \return OFU_INVALID_PARAMTERS_PASSED
  * \return OFU_ADD_GROUP_SUCCESS
  */
@@ -719,7 +716,73 @@ of_add_group(struct of_msg *msg,
              uint64_t  datapath_handle,
              uint32_t  group_id,
              uint8_t   group_type,
+             uint16_t  bucket_list_len,
 	     void **conn_info_pp);
+
+/** \ingroup Group_Operations 
+ * \brief Insert one or more buckets into a Group in Group Table.\n
+ * <b>Description </b>\n
+ * The new list of buckets are inserted to any position by using 'command_bkt_id' as a parameter. 
+ * Application must fill the message buffer descriptor 'msg' \n
+ * with necessary action buckets before calling this API.\n
+ *
+ * Length required to allocate message buffer to add group to group table is
+ * Length of the add/modify group message              +
+ * Length of buckets attached to the group
+ * (No_of_buckets *OFU_GROUP_ACTION_BUCKET_LEN)        + 
+ * Lengths of all actions pushed to all the buckets separately) 
+ * \param [in] msg      -  Message descriptor with buffer allocated earlier for adding group. 
+ *                         This buffer is expected to update action buckets using utility APIs. 
+ * \param [in] datapath_handle -  Handle of the data_path to add group.
+ * \param [in] group_id        -  ID of the group to add.
+ * \param [in] group_type      -  Type of group(All(OFPGT_ALL)/Select(OFPGT_SELECT)/Fast Fail over((OFGT_FF)) to add
+ * \param [in] command_bkt_id  -  Bucket Id used as part of insert bucket command in the group mod message.
+ *                                It is OFPG_BUCKET_FIRST or OFPG_BUCKET_LAST or current valid bucket id available 
+ *                                in the bucket list. This indicates current bucket id after which new bucket lists
+ *                                need to insert.
+ * \param [in] bucket_list_len -  Length of the buckets including its actions attached to the group
+ * \return OFU_INVALID_PARAMTERS_PASSED
+ * \return OFU_ADD_GROUP_SUCCESS
+ */
+int32_t
+of_insert_bucket_to_group(struct of_msg *msg,
+                          uint64_t  datapath_handle,
+                          uint32_t  group_id,
+                          uint8_t   group_type,
+                          uint32_t  command_bkt_id,
+                          uint16_t  bucket_list_len,
+                          void **conn_info_pp);
+
+/** \ingroup Group_Operations 
+ * \brief Remove a bucket or all buckets from group of Group Table.\n
+ *
+ * Length required to allocate message buffer to add group to group table is
+ * Length of the add/modify group message              +
+ * Length of buckets attached to the group
+ * (No_of_buckets *OFU_GROUP_ACTION_BUCKET_LEN)        + 
+ * Lengths of all actions pushed to all the buckets separately) 
+ * \param [in] msg      -  Message descriptor with buffer allocated earlier for adding group. 
+ *                         This buffer is expected to update action buckets using utility APIs. 
+ * \param [in] datapath_handle -  Handle of the data_path to add group.
+ * \param [in] group_id        -  ID of the group to add.
+ * \param [in] group_type      -  Type of group(All(OFPGT_ALL)/Select(OFPGT_SELECT)/Fast Fail over((OFGT_FF)) to add
+ * \param [in] command_bkt_id  -  Bucket Id used as part of remove bucket command in the group mod message.
+ *                                It is OFPG_BUCKET_FIRST or OFPG_BUCKET_LAST or OFPG_BUCKET_ALL or current valid 
+ *                                bucket id available in the bucket list. This indicates  bucket id to delete 
+ *                                from current bucket list. The OFPG_BUCKET_ALL means delete all buckets from the 
+ *                                group.
+ * \param [in] bucket_list_len -  Length of the buckets including its actions attached to the group
+ * \return OFU_INVALID_PARAMTERS_PASSED
+ * \return OFU_ADD_GROUP_SUCCESS
+ */
+
+int32_t
+of_remove_bucket_from_group(struct of_msg *msg,
+                          uint64_t  datapath_handle,
+                          uint32_t  group_id,
+                          uint8_t   group_type,
+                          uint32_t  command_bkt_id,
+                          void **conn_info_pp);
 
 /** \ingroup Group_Operations 
  * \brief Modify an Group to Group Table.\n
@@ -738,10 +801,7 @@ of_add_group(struct of_msg *msg,
  * \param [in] datapath_handle -  Handle of the data_path to modify group.
  * \param [in] group_id        -  ID of the group to modify.
  * \param [in] group_type      -  Type of group(All(OFPGT_ALL)/Select(OFPGT_SELECT)/Fast Fail over((OFGT_FF)) to modify
- * \param [in] clbk_command_arg1 - Application private information, arg1.In case of any errors,same will be passed to the\n
- *                                 error callback function that registered by the applications to receive errors.
- * \param [in] clbk_command_arg2 - Application private information, arg2.In case of any errors,same will be passed to the\n
- *                                 error callback function that registered by the applications to receive errors.
+ * \param [in] bucket_list_len -  Length of the buckets including its actions attached to the group
  * \return OFU_INVALID_PARAMTERS_PASSED
  * \return OFU_MODIFY_GROUP_SUCCESS
  */
@@ -750,7 +810,8 @@ of_modify_group(struct of_msg *msg,
                uint64_t  datapath_handle,
                uint32_t  group_id,
                uint8_t   group_type,
-		void **conn_info_pp);
+               uint16_t  bucket_list_len,
+	       void **conn_info_pp);
 
 /** \ingroup Group_Operations 
  * \brief Delete a Group from Group Table.\n
@@ -981,6 +1042,16 @@ of_add_data_to_pkt_and_send_to_dp(struct of_msg *msg,
                          uint8_t       *data,
                          void          *clbk_command_arg1,
                          void          *clbk_command_arg2);
+
+int32_t
+of_frame_pktout_msg(struct of_msg *msg,
+      uint64_t       datapath_handle,
+      uint8_t        reply_pkt,
+      uint32_t       buffer_id,
+      uint8_t        channel_no,
+      void **conn_info_pp
+      );
+
 
 /****** Controller Role change  APIs ************/
 

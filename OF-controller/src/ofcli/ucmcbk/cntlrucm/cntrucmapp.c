@@ -845,7 +845,7 @@ void cntrl_ucm_send_multipart_response(uint32_t multipart_type,void *data_p, uin
       cntrl_response->app_id=CM_ON_DIRECTOR_DATAPATH_STATS_AGGREGATESTATS_APPL_ID;
       break;
     case OFPMP_GROUP_DESC:
-      cntrl_response->app_id=CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_APPL_ID;
+      cntrl_response->app_id=CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_APPL_ID;
       break;
     case OFPMP_GROUP:
       cntrl_response->app_id=CM_ON_DIRECTOR_DATAPATH_GROUPS_STATS_APPL_ID;
@@ -926,7 +926,7 @@ void cntrl_ucm_send_multipart_response(uint32_t multipart_type,void *data_p, uin
         of_aggrstats_ucm_getparams (aggr_stats, &result_iv_pairs_p[rec_index]);
       }
       break;
-    case CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_APPL_ID:
+    case CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_APPL_ID:
       {
         struct ofi_group_desc_info *group_info=(struct ofi_group_desc_info *)data_p;
         //      cntrlrucm_debugmsg("group desc info");

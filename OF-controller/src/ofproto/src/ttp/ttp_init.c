@@ -138,6 +138,7 @@ int32_t ttp_init()
   l2_fwd_ttp_init();
   /* Initialization for CBENCH TTP */
   cbench_ttp_init();
+  ext427_ttp_init();
   if (dprm_register_forwarding_domain_notifications(DPRM_DOMAIN_ALL_NOTIFICATIONS,
             cntlr_ttp_domain_event_cbk,
                 NULL, NULL)!=OF_SUCCESS)

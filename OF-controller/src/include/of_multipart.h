@@ -3538,7 +3538,7 @@ struct ofi_group_desc_info
 #define OF_GROUP_DESC_LISTNODE_OFFSET offsetof(struct  ofi_group_desc_info, next_group)
 
 
-struct ofi_bucket
+/*struct ofi_bucket
 {
    of_list_node_t     next_bucket;
    uint32_t bucket_id; 
@@ -3546,6 +3546,14 @@ struct ofi_bucket
    uint32_t watch_port;
    uint32_t watch_group;
    of_list_t  action_list;
+};*/
+
+struct ofi_bucket
+{
+   of_list_node_t     next_bucket;
+   uint32_t bucket_id; 
+   of_list_t  action_list;
+   of_list_t  bucket_prop_list;
 };
 
 #define OF_BUCKET_LISTNODE_OFFSET offsetof(struct ofi_bucket, next_bucket)
@@ -3577,6 +3585,14 @@ struct ofi_action
 };
 #define OF_ACTION_LISTNODE_OFFSET offsetof(struct ofi_action, next_action)
 
+struct ofi_bucket_prop {
+   of_list_node_t     next_bucket_prop;
+   uint16_t weight;
+   uint32_t watch_port;
+   uint32_t watch_group;
+};
+
+#define OF_BUCKET_PROP_LISTNODE_OFFSET offsetof(struct ofi_bucket_prop, next_bucket_prop)
 
 /** \ingroup Switch_Description 
  *  \struct ofi_meter_rec_info

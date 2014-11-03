@@ -2436,6 +2436,12 @@ ofu_get_in_port_field(struct of_msg *msg,
                           void *match_fields,
                           uint16_t match_fields_len,
                           uint32_t *in_phy_port);
+int32_t
+ofu_get_metadata_field(struct of_msg *msg,
+                    void *match_fields,
+                    uint16_t match_fields_len,
+                    uint64_t *metadata);
+
 /** \ingroup Match_Fields 
  * \brief In_Phy_Port field set or not\n 
  * <b>Description</b>\n
@@ -2552,6 +2558,24 @@ ofu_get_tunnel_id_field(struct of_msg *msg,
 #define OFU_GROUP_ACTION_BUCKET_LEN     sizeof(struct ofp_bucket)
 
 /** \ingroup Group_Utilities 
+ *  OFU_GROUP_BUCKET_PROP_WEIGHT_LEN
+ *  - Returns length of buffer required to add weight properity to action bucket 
+ */
+#define OFU_GROUP_BUCKET_PROP_WEIGHT_LEN  sizeof(struct ofp_group_bucket_prop_weight)
+
+/** \ingroup Group_Utilities 
+ *  OFU_GROUP_BUCKET_PROP_WATCH_LEN
+ *  - Returns length of buffer required to add watch properity to action bucket 
+ */
+#define OFU_GROUP_BUCKET_PROP_WATCH_LEN  sizeof(struct ofp_group_bucket_prop_watch)
+
+/** \ingroup Group_Utilities 
+ *  OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE
+ *  - Returns length of buffer required to add/modify/delete group message
+ */
+#define OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE sizeof(struct ofp_group_mod)
+
+/** \ingroup Group_Utilities 
  *  OFU_ADD_OR_MODIFY_OR_DELETE_GROUP_MESSAGE
  *  - Returns length of buffer required to add/modify/delete group message
  */
@@ -2583,12 +2607,14 @@ ofu_start_appending_buckets_to_group(struct of_msg *msg);
  * before calling API to append next bucket of same type.
  * Before pushing action, caller should not call start pushing action API \n
  * ofu_start_pushing_actions().
- * \param [in] msg - Message descriptor with buffer used to append bucket with actions 
+ * \param [in] msg       - Message descriptor with buffer used to append bucket with actions 
+ * \param [in] bucket_id - Unique Bucket ID assigned to the bucket which adding to group. 
  * \return OFU_INVALID_GROUP_TYPE
  * \return OFU_APPEND_BUCKET_SUCCESS
  */
 int32_t
-ofu_append_bucket_to_group_type_all(struct of_msg *msg);
+ofu_append_bucket_to_group_type_all(struct of_msg *msg,
+                                    uint32_t bucket_id);
 
 /** \ingroup Group_Utilities 
  * \brief Append Bucket to group type Select\n
@@ -2601,13 +2627,13 @@ ofu_append_bucket_to_group_type_all(struct of_msg *msg);
  * Before pushing action, caller should not call start pushing action API \n
  * ofu_start_pushing_actions().
  * \param [in] msg    - Message descriptor with buffer used to append buckets with actions 
- * \param [in] weight - Weight of the bucket
+ * \param [in] bucket_id - Unique Bucket ID assigned to the bucket which adding to group. 
  * \return OFU_INVALID_GROUP_TYPE
  * \return OFU_APPEND_BUCKET_SUCCESS
  */
 int32_t
 ofu_append_bucket_to_group_type_select(struct of_msg *msg,
-                                       uint16_t weight);
+                                       uint32_t bucket_id);
 
 /** \ingroup Group_Utilities 
  * \brief Append Bucket to group type "Fast fail over"\n
@@ -2620,17 +2646,13 @@ ofu_append_bucket_to_group_type_select(struct of_msg *msg,
  * Before pushing action, caller should not call start pushing action API \n
  * ofu_start_pushing_actions().
  * \param [in] msg         - Message descriptor with buffer used to append buckets with actions\n 
- * \param [in] watch_port  - If specified, system performs the liveness check of the port to know whether\n
- *                           this bucket can be candidate for forwarding packet.
- * \param [in] watch_group - If specified, system performs the liveness check of the group to know whether\n
- *                           this bucket can be candidate for forwarding packet.
+ * \param [in] bucket_id - Unique Bucket ID assigned to the bucket which adding to group. 
  * \return OFU_INVALID_GROUP_TYPE
  * \return OFU_APPEND_BUCKET_SUCCESS
  */
 int32_t
 ofu_append_bucket_to_group_type_fast_failover(struct of_msg *msg,
-                                              uint32_t watch_port,
-                                              uint32_t watch_group);
+                                              uint32_t bucket_id);
 
 /** \ingroup Group_Utilities 
  * \brief End of appending all buckets\n

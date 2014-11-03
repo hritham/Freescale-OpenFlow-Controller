@@ -70,6 +70,7 @@ void cntlr_shared_lib_init(void)
     sm_arp_app_init();
     sm_app_igmp_init();
     sample_l2_init();
+    ext427_app_init();
 }
 #endif
 

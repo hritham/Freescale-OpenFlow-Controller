@@ -28,9 +28,11 @@ all: $(TARGET)
 
 OBJS = 	$(BIN_DIR)/ttpapi.o\
 	$(BIN_DIR)/sd_router_ttp.o\
+	$(BIN_DIR)/dc_vs_ttp.o\
 	$(BIN_DIR)/l3_fwd_ttp.o\
 	$(BIN_DIR)/l2_fwd_ttp.o\
 	$(BIN_DIR)/cbench_ttp.o\
+	$(BIN_DIR)/pktout_pipepline_fields_ext_ttp.o\
 	$(BIN_DIR)/ttp_init.o\
 	
 

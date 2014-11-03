@@ -74,23 +74,19 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
 int32_t of_bucket_verifycfg (struct cm_array_of_iv_pairs * key_iv_pairs,
 		uint32_t command_id, struct cm_app_result ** result_pp);
 
-
-int32_t of_bucket_verifycfg (struct cm_array_of_iv_pairs * key_iv_pairs,
-		uint32_t command_id, struct cm_app_result ** result_pp);
-
  int32_t of_bucket_ucm_getparams (struct ofi_bucket *group_info,
 		struct cm_array_of_iv_pairs * result_iv_pairs_p);
 
- int32_t of_bucket_ucm_setmandparams (struct cm_array_of_iv_pairs *
-		mand_iv_pairs,
+ int32_t of_bucket_ucm_setmandparams (struct cm_array_of_iv_pairs *mand_iv_pairs,
 		struct  ofi_group_desc_info *group_info,
-		struct ofi_bucket *bucket_info,
+		struct ofi_bucket *bucket_info, char *operation, uint32_t *position,
 		struct cm_app_result ** app_result_pp);
 
- int32_t of_bucket_ucm_setoptparams (struct cm_array_of_iv_pairs *
-		opt_iv_pairs,
-		struct ofi_bucket * bucket_info,
-		struct cm_app_result ** app_result_pp);
+int32_t of_bucket_ucm_setoptparams (struct cm_array_of_iv_pairs *opt_iv_pairs,
+                                   struct ofi_bucket_prop * bucket_prop,
+                                   struct ofi_action * action_info,
+                                   char *operation, uint32_t *afterbucketid,
+                                   struct cm_app_result ** app_result_pp);
 
 struct cm_dm_app_callbacks of_bucket_ucm_callbacks = 
 {
@@ -119,7 +115,7 @@ int32_t of_bucket_appl_ucmcbk_init (void)
 {
 	int32_t return_value;
 
-	return_value=cm_register_app_callbacks (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_APPL_ID,
+	return_value=cm_register_app_callbacks (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_APPL_ID,
 			&of_bucket_ucm_callbacks);
 	if(return_value != OF_SUCCESS)
 	{
@@ -170,6 +166,10 @@ void* of_bucket_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
 	struct ofi_bucket *bucket_info=NULL;
 	struct cm_app_result *of_bucket_result = NULL;
 	int32_t return_value;
+        uint64_t  datapath_handle;
+        struct dprm_datapath_general_info datapath_info={};
+        char operation[30];
+        uint8_t position;
 
         uchar8_t offset;
         offset = OF_GROUP_TRANS_LISTNODE_OFFSET;
@@ -183,7 +183,7 @@ void* of_bucket_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
 		return NULL;
 	}
 
-	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, bucket_info, &of_bucket_result)) !=
+	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, bucket_info, operation, &position, &of_bucket_result)) !=
 			OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
@@ -200,8 +200,12 @@ void* of_bucket_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
 
 	}
 
-#if 1
-	return_value =of_register_bucket_to_group(trans_rec->datapath_handle,bucket_info,group_info.group_id);
+#if 0
+        return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
+        /*return_value = of_inform_dp_2_add_port_4_multicast_traffic(trans_rec->datapath_handle,
+                                                       group_info.group_id,1,1);*/
+                                                       //bucket_info->bucket_id, bucket_info->watch_port);
+	//return_value =of_register_bucket_to_group(trans_rec->datapath_handle,bucket_info,group_info.group_id);
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Bucket Addition to group %d Failed", group_info.group_id);
@@ -232,6 +236,13 @@ int32_t of_bucket_addrec (void * config_trans_p,
 	struct ofi_bucket bucket_info = { };
 	struct ofi_group_desc_info group_info = { };
 	struct group_trans *trans_rec=(struct group_trans *)config_trans_p;
+        struct ofi_action action_info={};
+	struct ofi_bucket_prop bucket_prop = { };
+        char operation[30];
+        uint8_t afterbucketid;
+        uint32_t  command_bkt_id;
+        uchar8_t offset;
+        offset = OF_GROUP_TRANS_LISTNODE_OFFSET;
 
 	CM_CBK_DEBUG_PRINT ("Entered");
 	of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
@@ -239,23 +250,67 @@ int32_t of_bucket_addrec (void * config_trans_p,
 	CM_CBK_DEBUG_PRINT ("trans id %d command id %d sub cmd id %d group id %d",trans_rec->trans_id,trans_rec->command_id,
 			trans_rec->sub_command_id,trans_rec->group_id);
 
-	if ((of_bucket_ucm_setmandparams (mand_iv_pairs,&group_info, &bucket_info, &of_bucket_result)) !=
-			OF_SUCCESS)
+	if ((of_bucket_ucm_setmandparams (mand_iv_pairs,&group_info, &bucket_info, 
+                          operation, &command_bkt_id, &of_bucket_result)) !=
+			  OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
 		*result_pp=of_bucket_result;
 		return OF_FAILURE;
 	}
 
-	return_value =of_bucket_ucm_setoptparams (opt_iv_pairs, &bucket_info, &of_bucket_result);
+	return_value =of_bucket_ucm_setoptparams (opt_iv_pairs, &bucket_prop, &action_info,
+                                  operation, &command_bkt_id, &of_bucket_result);
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Optional Parameters Failed");
 		*result_pp =of_bucket_result;
 		return OF_FAILURE;
 	}
+	OF_LIST_SCAN(group_trans_list_g, trans_rec, struct group_trans *,offset )
+	{
+		if(trans_rec->group_id == group_info.group_id)
+		{
+			CM_CBK_DEBUG_PRINT ("transaction found");
+			break;
+		}
+	}
+
+        group_info.group_type = trans_rec->group_type;
+	CM_CBK_DEBUG_PRINT ("group type=%d", trans_rec->group_type);
 #if 1
-	return_value =of_update_bucket_in_group(trans_rec->datapath_handle, &bucket_info,group_info.group_id);
+        if (strcmp(operation, "insert") == 0)
+        {
+          return_value = of_frame_and_send_mod_group_bucket_info(trans_rec->datapath_handle, 
+                          &group_info, &bucket_info, &bucket_prop, &action_info, command_bkt_id);
+          if (return_value == OF_SUCCESS)
+            trans_rec->bucket_id = bucket_info.bucket_id;
+        }
+        else if (strcmp(operation, "remove") == 0)
+        {
+          if ((command_bkt_id == OFPG_BUCKET_FIRST) || (command_bkt_id == OFPG_BUCKET_LAST) ||
+              (command_bkt_id == OFPG_BUCKET_ALL))
+          {
+            return_value = of_frame_and_send_del_bucket_info(trans_rec->datapath_handle, 
+                          &group_info, &bucket_info, command_bkt_id);
+          }
+          else
+          {
+            return_value = of_frame_and_send_del_bucket_info(trans_rec->datapath_handle, 
+                          &group_info, &bucket_info, bucket_info.bucket_id);
+          }
+       
+          if (return_value == OF_SUCCESS)
+            trans_rec->bucket_id = 0;
+        }
+        else
+        {
+	   CM_CBK_DEBUG_PRINT ("Invalid operation");
+	   fill_app_result_struct (&of_bucket_result, NULL, CM_GLU_BUCKET_UPDATE_FAILED);
+	   *result_pp =of_bucket_result;
+           return OF_FAILURE;
+        }
+
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Bucket updation at group %d failed", group_info.group_id);
@@ -282,33 +337,93 @@ int32_t of_bucket_setrec (void * config_trans_p,
 	struct cm_app_result *of_bucket_result = NULL;
 	int32_t return_value = OF_FAILURE;
 	struct ofi_bucket bucket_info = { };
-	struct dprm_switch_runtime_info runtime_info;
-	struct group_trans *trans_rec=config_trans_p;
-
+	struct ofi_group_desc_info group_info = { };
+	struct group_trans *trans_rec=(struct group_trans *)config_trans_p;
+        struct ofi_action action_info={};
+	struct ofi_bucket_prop bucket_prop = { };
+        char operation[30];
+        uint8_t afterbucketid;
+        uint32_t  command_bkt_id;
+        uchar8_t offset;
+        offset = OF_GROUP_TRANS_LISTNODE_OFFSET;
 
 	CM_CBK_DEBUG_PRINT ("Entered");
 	of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
-#if 0
-	if ((of_bucket_ucm_setmandparams (mand_iv_pairs,&group_info, &bucket_info, &of_bucket_result)) !=
-			OF_SUCCESS)
+
+	CM_CBK_DEBUG_PRINT ("trans id %d command id %d sub cmd id %d group id %d",trans_rec->trans_id,trans_rec->command_id,
+			trans_rec->sub_command_id,trans_rec->group_id);
+
+	if ((of_bucket_ucm_setmandparams (mand_iv_pairs,&group_info, &bucket_info, 
+                          operation, &command_bkt_id, &of_bucket_result)) !=
+			  OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
 		*result_pp=of_bucket_result;
 		return OF_FAILURE;
 	}
 
-
-	return_value=of_bucket_unregister_buckets(bucket_info.group_id);
+	return_value =of_bucket_ucm_setoptparams (opt_iv_pairs, &bucket_prop, &action_info,
+                                  operation, &command_bkt_id, &of_bucket_result);
 	if (return_value != OF_SUCCESS)
 	{
-		CM_CBK_DEBUG_PRINT ("Error: group doesn't exists with name %d",bucket_info.group_id);
-		fill_app_result_struct (&of_bucket_result, NULL, CM_GLU_VLAN_FAILED);
+		CM_CBK_DEBUG_PRINT ("Set Optional Parameters Failed");
 		*result_pp =of_bucket_result;
 		return OF_FAILURE;
 	}
+	OF_LIST_SCAN(group_trans_list_g, trans_rec, struct group_trans *,offset )
+	{
+		if(trans_rec->group_id == group_info.group_id)
+		{
+			CM_CBK_DEBUG_PRINT ("transaction found");
+			break;
+		}
+	}
 
-#endif 
-	return OF_FAILURE;
+        group_info.group_type = trans_rec->group_type;
+	CM_CBK_DEBUG_PRINT ("group type=%d", trans_rec->group_type);
+#if 1
+        /*if (strcmp(operation, "insert") == 0)
+        {
+          return_value = of_frame_and_send_mod_group_bucket_info(trans_rec->datapath_handle, 
+                               &group_info, &bucket_info, &bucket_prop, &action_info, command_bkt_id);
+          if (return_value == OF_SUCCESS)
+            trans_rec->bucket_id = bucket_info.bucket_id;
+        }
+        else */
+        if (strcmp(operation, "remove") == 0)
+        {
+          if ((command_bkt_id == OFPG_BUCKET_FIRST) || (command_bkt_id == OFPG_BUCKET_LAST) ||
+              (command_bkt_id == OFPG_BUCKET_ALL))
+          {
+            return_value = of_frame_and_send_del_bucket_info(trans_rec->datapath_handle, 
+                          &group_info, &bucket_info, command_bkt_id);
+          }
+          else
+          {
+            return_value = of_frame_and_send_del_bucket_info(trans_rec->datapath_handle, 
+                          &group_info, &bucket_info, bucket_info.bucket_id);
+          }
+
+          if (return_value == OF_SUCCESS)
+            trans_rec->bucket_id = 0;
+        }
+        else
+        {
+           /* assuming that action add so return success, if 
+            any failure occure wile adding action, user will prompt with
+            error message */
+           return OF_SUCCESS;
+        }
+
+	if (return_value != OF_SUCCESS)
+	{
+		CM_CBK_DEBUG_PRINT ("Bucket updation at group %d failed", group_info.group_id);
+		fill_app_result_struct (&of_bucket_result, NULL, CM_GLU_BUCKET_UPDATE_FAILED);
+		*result_pp =of_bucket_result;
+		return OF_FAILURE;
+	}
+#endif
+	return OF_SUCCESS;
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -327,6 +442,8 @@ int32_t of_bucket_delrec (void * config_trans_p,
 	struct ofi_bucket bucket_info = { };
 	struct ofi_group_desc_info group_info = { };
 	struct group_trans *trans_rec=config_trans_p;
+        uint8_t position;
+        char operation[30];
 
 	CM_CBK_DEBUG_PRINT ("Entered");
 	of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
@@ -337,7 +454,7 @@ int32_t of_bucket_delrec (void * config_trans_p,
 		return OF_FAILURE;
 	}
 
-	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, &bucket_info, &of_bucket_result)) !=
+	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, &bucket_info, operation, &position, &of_bucket_result)) !=
 			OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
@@ -346,7 +463,9 @@ int32_t of_bucket_delrec (void * config_trans_p,
 		return OF_FAILURE;
 	}
 
-	return_value=of_group_unregister_bucket(trans_rec->datapath_handle,group_info.group_id, bucket_info.bucket_id);
+	//return_value=of_group_unregister_bucket(trans_rec->datapath_handle,group_info.group_id, bucket_info.bucket_id);
+	//return_value=of_inform_dp_abt_port_del_from_multicast_group(
+         //           trans_rec->datapath_handle,group_info.group_id, bucket_info.bucket_id);
 	if (return_value != OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Bucket does not exist with id %d",bucket_info.bucket_id);
@@ -416,6 +535,8 @@ int32_t of_bucket_getfirstnrecs(struct cm_array_of_iv_pairs * key_iv_pairs,
 	struct cm_app_result *of_bucket_result = NULL;
 	struct ofi_group_desc_info group_info={};
 	struct ofi_bucket bucket_info={};
+        uint8_t position;
+        char operation[30];
 
 
 	CM_CBK_DEBUG_PRINT ("not supporting");
@@ -423,7 +544,7 @@ int32_t of_bucket_getfirstnrecs(struct cm_array_of_iv_pairs * key_iv_pairs,
 
 	of_memset (&group_info, 0, sizeof (struct ofi_group_desc_info));
 	of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
-	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, &bucket_info, &of_bucket_result)) !=
+	if ((of_bucket_ucm_setmandparams (key_iv_pairs,&group_info, &bucket_info, operation, &position, &of_bucket_result)) !=
 			OF_SUCCESS)
 	{
 		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
@@ -471,7 +592,55 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
 	struct cm_app_result *of_bucket_result = NULL;
 	uint32_t ii = 0;
 	int32_t return_value = OF_FAILURE;
+       struct ofi_group_desc_info group_info={};
+       struct dprm_datapath_general_info datapath_info={};
+       uint64_t datapath_handle;
+       struct group_trans *trans_rec_entry_p=NULL;
+       uchar8_t offset;
+       offset=  OF_GROUP_TRANS_LISTNODE_OFFSET;
+       char operation[30];
+       uint32_t  command_bkt_id;
+	struct ofi_bucket bucket_info = { };
 
+
+	of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
+	of_memset (&group_info, 0, sizeof (struct ofi_group_desc_info));
+
+	if ((of_bucket_ucm_setmandparams (key_iv_pairs, &group_info, &bucket_info, 
+                          operation, &command_bkt_id, &of_bucket_result)) !=
+			  OF_SUCCESS)
+	{
+		CM_CBK_DEBUG_PRINT ("Set Mandatory Parameters Failed");
+		return OF_FAILURE;
+	}
+
+        OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
+        {
+          if (trans_rec_entry_p != NULL)
+          {
+             CM_CBK_DEBUG_PRINT("trans_rec_entry_p->group_id = %d :: group_info.group_id=%d",trans_rec_entry_p->group_id, group_info.group_id);
+             if (trans_rec_entry_p->bucket_id == bucket_info.bucket_id)
+             {
+                result_iv_pairs_p =
+                 (struct cm_array_of_iv_pairs *) of_calloc (1, sizeof (struct cm_array_of_iv_pairs));
+               if (result_iv_pairs_p == NULL)
+               {
+                 CM_CBK_DEBUG_PRINT ("Memory allocation failed for result_iv_pairs_p");
+                 return OF_FAILURE;
+               }
+
+               return_value = of_bucket_ucm_getparams (&bucket_info, &result_iv_pairs_p[0]);
+               if ( return_value != OF_SUCCESS)
+               {
+                 CM_CBK_DEBUG_PRINT ("of_group_ucm_getparams failed");
+                 return OF_FAILURE;
+               } 
+
+              *pIvPairArr = result_iv_pairs_p;
+               return OF_SUCCESS;
+             }
+          }
+        }
 	CM_CBK_DEBUG_PRINT ("no exact record");
 	return OF_FAILURE;
 
@@ -484,37 +653,72 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
  * Output:
  * Result:
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
- int32_t of_bucket_ucm_setmandparams (struct cm_array_of_iv_pairs *
-		mand_iv_pairs,
+ int32_t of_bucket_ucm_setmandparams (struct cm_array_of_iv_pairs *mand_iv_pairs,
 		struct  ofi_group_desc_info *group_info,
-		struct ofi_bucket *bucket_info,
+		struct ofi_bucket *bucket_info, char *operation, uint32_t *position,
 		struct cm_app_result ** app_result_pp)
 {
-	uint32_t opt_param_cnt;
-	uint32_t group_id;
-	uint32_t bucket_id;
+   uint32_t opt_param_cnt;
+   uint32_t group_id;
+   uint32_t bucket_id;
 
-	CM_CBK_DEBUG_PRINT ("Entered");
-	for (opt_param_cnt = 0; opt_param_cnt < mand_iv_pairs->count_ui;
+   CM_CBK_DEBUG_PRINT ("Entered");
+   for (opt_param_cnt = 0; opt_param_cnt < mand_iv_pairs->count_ui;
 			opt_param_cnt++)
-	{
-		switch (mand_iv_pairs->iv_pairs[opt_param_cnt].id_ui)
-		{
-			case CM_DM_GROUPDESC_GROUP_ID_ID:
-				group_id=of_atoi((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
-				group_info->group_id=group_id;
-				CM_CBK_DEBUG_PRINT ("group id is %d", group_id);
-				break;
-			case  CM_DM_BUCKET_BUCKETID_ID:
-				bucket_id=of_atoi((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
-				bucket_info->bucket_id=bucket_id;
-				CM_CBK_DEBUG_PRINT ("bucket id %d", bucket_id);
-				break;
+   {
+   	switch (mand_iv_pairs->iv_pairs[opt_param_cnt].id_ui)
+   	{
+           case CM_DM_GROUPDESC_GROUP_ID_ID:
+      	      group_id=of_atoi((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
+      	      group_info->group_id=group_id;
+      	      CM_CBK_DEBUG_PRINT ("group id is %d", group_id);
+      	   break;
 
-		}
+   	   case  CM_DM_BUCKET_BUCKETID_ID:
+      	      bucket_id=of_atoi((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
+      	      bucket_info->bucket_id=bucket_id;
+      	      CM_CBK_DEBUG_PRINT ("bucket id %d", bucket_id);
+      	   break;
+
+          case  CM_DM_BUCKET_BUCKETOPERATION_ID:
+      	      strcpy(operation, (char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
+      	      CM_CBK_DEBUG_PRINT ("bucket operation %s", operation);
+          break;
+
+
+           case CM_DM_BUCKET_BUCKETPOSITION_ID:
+             if((strcmp((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p, "first")) == 0)
+             {
+       	        *position=OFPG_BUCKET_FIRST;
+	      CM_CBK_DEBUG_PRINT ("position %d", *position);
+             }
+             else if (strcmp((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p, "last") == 0)
+             {
+       	       *position=OFPG_BUCKET_LAST;
+	      CM_CBK_DEBUG_PRINT ("position %d", *position);
+             }
+             else if(strcmp((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p,"all")==0)
+             {
+       	       *position=OFPG_BUCKET_ALL;
+	      CM_CBK_DEBUG_PRINT ("position %d", *position);
+             }
+             else if(strcmp((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p,"afterbucket")==0)
+             {
+       	       //*position=OFPG_BUCKET_ALL;
+	      CM_CBK_DEBUG_PRINT ("position %d", *position);
+             }
+             else 
+             {
+      	        CM_CBK_DEBUG_PRINT ("Invalid option %s", 
+                            (char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
+                return OF_FAILURE;
+             }
+	   break;
+
+	  }
 	}
-	CM_CBK_PRINT_IVPAIR_ARRAY (mand_iv_pairs);
-	return OF_SUCCESS;
+     CM_CBK_PRINT_IVPAIR_ARRAY (mand_iv_pairs);
+     return OF_SUCCESS;
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -542,7 +746,7 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
 				group_id=of_atoi((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
 				CM_CBK_DEBUG_PRINT ("group id is %d", group_id);
 				break;
-			case CM_DM_GROUPDESC_TYPE_ID:
+			case CM_DM_GROUPDESC_GROUPTYPE_ID:
 				type=ucm_uint8_from_str_ptr((char *) mand_iv_pairs->iv_pairs[opt_param_cnt].value_p);
 				CM_CBK_DEBUG_PRINT ("type is %d", type);
 				break;
@@ -560,45 +764,175 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
  * Output:
  * Result:
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
- int32_t of_bucket_ucm_setoptparams (struct cm_array_of_iv_pairs *
-		opt_iv_pairs,
-		struct ofi_bucket * bucket_info,
-		struct cm_app_result ** app_result_pp)
+int32_t of_bucket_ucm_setoptparams (struct cm_array_of_iv_pairs *opt_iv_pairs,
+                                   struct ofi_bucket_prop * bucket_prop,
+                                   struct ofi_action * action_info,
+                                   char *operation, uint32_t *afterbucketid,
+                                   struct cm_app_result ** app_result_pp)
 {
-	uint32_t opt_param_cnt;
-	uint16_t weight;
-	uint32_t watch_port;
-	uint32_t watch_group;
+  uint32_t uiOptParamCnt,max_len,ttl,ether_type,group_id,queue_id;
+  uint8_t switch_type;
+  char *data;
+  char *action_type;
+  uint32_t action_type_len;
+  char *insert_position;
+  uint32_t position_len;
 
-	CM_CBK_DEBUG_PRINT ("Entered");
+  CM_CBK_DEBUG_PRINT ("Entered");
 
-	for (opt_param_cnt = 0; opt_param_cnt < opt_iv_pairs->count_ui; opt_param_cnt++)
-	{
-		switch (opt_iv_pairs->iv_pairs[opt_param_cnt].id_ui)
+  for (uiOptParamCnt = 0; uiOptParamCnt < opt_iv_pairs->count_ui; uiOptParamCnt++)
+  {
+    switch (opt_iv_pairs->iv_pairs[uiOptParamCnt].id_ui)
+    {
+       case  CM_DM_BUCKET_BUCKETOPERATION_ID:
+      	      strcpy(operation, (char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+      	      CM_CBK_DEBUG_PRINT ("bucket operation %s", operation);
+       break;
+
+       case CM_DM_BUCKET_WEIGHT_ID:
+              bucket_prop->weight=(uint16_t)of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+	     CM_CBK_DEBUG_PRINT ("weight  %d", bucket_prop->weight);
+	break;
+
+	case CM_DM_BUCKET_WATCH_PORT_ID:
+		bucket_prop->watch_port=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		CM_CBK_DEBUG_PRINT ("watch_port  %d", bucket_prop->watch_port);
+	break;
+	case CM_DM_BUCKET_WATCH_GROUP_ID:
+		bucket_prop->watch_group=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		CM_CBK_DEBUG_PRINT ("watch_group  %d", bucket_prop->watch_group);
+	break;
+
+#if 1
+	case CM_DM_BUCKET_PORT_NO_ID:
+		data = (char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p;
+		if ((*data == '0') &&
+				((*(data+1) == 'x') || (*(data+1) == 'X')))
 		{
-			case CM_DM_BUCKET_WEIGHT_ID:
-				weight=(uint16_t)of_atoi((char *) opt_iv_pairs->iv_pairs[opt_param_cnt].value_p);
-				bucket_info->weight=weight;
-				CM_CBK_DEBUG_PRINT ("weight  %d", weight);
-				break;
-			case CM_DM_BUCKET_WATCH_PORT_ID:
-				watch_port=of_atoi((char *) opt_iv_pairs->iv_pairs[opt_param_cnt].value_p);
-				bucket_info->watch_port=watch_port;
-				CM_CBK_DEBUG_PRINT ("watch_port  %d", watch_port);
-				break;
-			case CM_DM_BUCKET_WATCH_GROUP_ID:
-				watch_group=of_atoi((char *) opt_iv_pairs->iv_pairs[opt_param_cnt].value_p);
-				bucket_info->watch_group=watch_group;
-				CM_CBK_DEBUG_PRINT ("watch_group  %d", watch_group);
-				break;
-			default:
-				break;
+			action_info->port_no = (uint32_t)atox_32(data+2);
 		}
-	}
+		else
+		{
+			action_info->port_no = (uint32_t)atoi(data);
+		}
+		CM_CBK_DEBUG_PRINT ("port_no  action_info->port_no %d", action_info->port_no );
+	break;
 
-	CM_CBK_PRINT_IVPAIR_ARRAY (opt_iv_pairs);
-	return OF_SUCCESS;
+	case CM_DM_BUCKET_MAX_LEN_ID:
+		max_len=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->max_len=(uint16_t ) max_len;
+		CM_CBK_DEBUG_PRINT ("max_len  %d action_info->max_len %d ", max_len,action_info->max_len);
+	break;
+
+	case CM_DM_BUCKET_TTL_ID:
+		ttl=ucm_uint8_from_str_ptr((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->ttl= ttl;
+		CM_CBK_DEBUG_PRINT ("ttl  %d action_info->ttl %d ", ttl,action_info->ttl);
+		break;
+
+	case CM_DM_BUCKET_ETHER_TYPE_ID:
+		ether_type=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->ether_type=(uint16_t ) ether_type;
+		CM_CBK_DEBUG_PRINT ("ether_type  %d action_info->ether_type %d ", ether_type,action_info->ether_type);
+		break;
+
+	case CM_DM_BUCKET_GROUPID_ID:
+		group_id=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->group_id= group_id;
+		CM_CBK_DEBUG_PRINT ("group_id  %d action_info->group_id %d ", group_id,action_info->group_id);
+	break;
+
+	case CM_DM_BUCKET_QUEUEID_ID:
+		queue_id=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->queue_id= queue_id;
+		CM_CBK_DEBUG_PRINT ("queue_id  %d action_info->queue_id %d ", queue_id,action_info->queue_id);
+	break;
+
+	case CM_DM_BUCKET_SETFIELDTYPE_ID:
+		if(action_info->type != OFPAT_SET_FIELD)
+		{
+			CM_CBK_DEBUG_PRINT("Action type is not set_field ");
+			return  OF_FAILURE;
+		}
+		if(of_group_set_action_setfield_type(action_info,
+			(int8_t *)opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,
+		opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length)!=OF_SUCCESS)
+		{
+			CM_CBK_DEBUG_PRINT("set action field type failed");
+			return OF_FAILURE;
+		}
+	break;
+
+	case CM_DM_BUCKET_SETFIELDVAL_ID:
+		if(action_info->type != OFPAT_SET_FIELD)
+		{
+			CM_CBK_DEBUG_PRINT("Action type is not set_field");
+			return OF_FAILURE;
+		}
+		if(of_group_set_action_setfieldtype_value(action_info,
+		   (int8_t *)opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,
+		  opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length)!=OF_SUCCESS)
+		{
+			CM_CBK_DEBUG_PRINT("set action field type value failed!.");
+			return  OF_FAILURE;
+		}
+	break;
+	case  CM_DM_BUCKET_ACTIONTYPE_ID:
+		action_type=((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_type_len = (opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length);
+		of_group_set_action_type(action_info,action_type,action_type_len);
+
+		//action_info->type=(uint16_t )action_type;
+		CM_CBK_DEBUG_PRINT ("action type %d %s ",action_info->type,action_type);
+         break;
+
+#endif
+         case CM_DM_BUCKET_BUCKETPOSITION_ID:
+             if((strcmp((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p, "first")) == 0)
+             {
+       	        *afterbucketid=OFPG_BUCKET_FIRST;
+	      CM_CBK_DEBUG_PRINT ("position %d", *afterbucketid);
+             }
+             else if (strcmp((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p, "last") == 0)
+             {
+       	       *afterbucketid=OFPG_BUCKET_LAST;
+	      CM_CBK_DEBUG_PRINT ("position %d", *afterbucketid);
+             }
+             else if(strcmp((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,"all")==0)
+             {
+       	       *afterbucketid=OFPG_BUCKET_ALL;
+	      CM_CBK_DEBUG_PRINT ("position %d", *afterbucketid);
+             }
+             else if(strcmp((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,"afterbucket")==0)
+             {
+       	       //*position=OFPG_BUCKET_ALL;
+	      CM_CBK_DEBUG_PRINT ("position %d", *afterbucketid);
+             }
+             else 
+             {
+      	        CM_CBK_DEBUG_PRINT ("Invalid option %s", 
+                            (char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+                return OF_FAILURE;
+             }
+	   break;
+
+	case CM_DM_BUCKET_AFTERBUCKETID_ID:
+            *afterbucketid=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+	    CM_CBK_DEBUG_PRINT ("after bucket id = %d ", *afterbucketid);
+	break;
+
+	default:
+		CM_CBK_DEBUG_PRINT ("Invalid option");
+                return OF_FAILURE;
+
+    }
+  }
+
+  CM_CBK_PRINT_IVPAIR_ARRAY (opt_iv_pairs);
+  return OF_SUCCESS;
 }
+
+
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
  * Function Name:
@@ -612,9 +946,9 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
 {
 	char string[64];
 	int32_t index = 0, jj, count_ui, iIndex;
-#define CM_BUCKET_CHILD_COUNT 2
+#define CM_BUCKET_CHILD_COUNT 1
 	count_ui = CM_BUCKET_CHILD_COUNT;
-#if 0
+#if 1
 	//CM_CBK_DEBUG_PRINT ("Entered");
 	result_iv_pairs_p->iv_pairs = (struct cm_iv_pai*)of_calloc(count_ui, sizeof(struct cm_iv_pair));
 	if(!result_iv_pairs_p->iv_pairs)
@@ -624,14 +958,14 @@ int32_t of_bucket_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
 	}
 
 	of_memset(string, 0, sizeof(string));
-	of_itoa (bucket_info->group_id, string);
-	FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_GROUP_ID_ID,CM_DATA_TYPE_STRING, string);
+	of_itoa (bucket_info->bucket_id, string);
+	FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_BUCKET_BUCKETID_ID, CM_DATA_TYPE_STRING, string);
 	index++;
 
-	of_memset(string, 0, sizeof(string));
+	/*of_memset(string, 0, sizeof(string));
 	of_sprintf(string,"%d",bucket_info->group_type);
 	FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_TABLESTATS_ACTIVECOUNT_ID,CM_DATA_TYPE_STRING, string);
-	index++;
+	index++;*/
 
 
 	result_iv_pairs_p->count_ui = index;

@@ -17,6 +17,8 @@ struct group_trans{
         uint64_t datapath_handle;
         uint32_t trans_id;
         uint32_t group_id;
+        uint32_t bucket_id;
+        uint8_t  group_type;
         uint32_t command_id;
         uint32_t sub_command_id;
 };

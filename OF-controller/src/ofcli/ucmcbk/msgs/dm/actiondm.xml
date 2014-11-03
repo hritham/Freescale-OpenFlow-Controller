@@ -30,7 +30,7 @@
 
 <DataModel ModuleName="action" Version="1.0" schemaVersion="3.0">
 
-     <InstallPath>on_director.datapath.groups.group.bucket.action</InstallPath>
+     <InstallPath>on_director.datapath.groups.groupdesc.bucket.action</InstallPath>
 
      <DataModelNode>
          <InstallPath>type</InstallPath>

@@ -154,7 +154,7 @@ typedef struct cntlr_app_mcast_rtentry_s
   mcast_portinfo_t port_info[OF_CNTLR_APP_MAX_MCAST_OUTPORTS];
   uint32_t	grp_id;
   uint32_t	flow_id;
-  uint32_t	no_of_outports;
+  uint32_t	num_of_outports;
   uint8_t	binuse; /* TRUE if entry is being used and valid else FALSE */
 }cntlr_app_mcast_rtentry_t;
 

@@ -2,7 +2,7 @@
 #ifndef CM_DPCBK_H
 #define CM_DPCBK_H
 
-#define CM_CBK_DEBUG
+//#define CM_CBK_DEBUG
 #ifdef CM_CBK_DEBUG
 #define CM_CBK_DEBUG_PRINT printf("\n%35s(%4d): ",__FUNCTION__,__LINE__),\
 	                          printf 

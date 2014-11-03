@@ -675,8 +675,8 @@ if (return_value != OF_SUCCESS)
 
 //Group
 	return_value =
-		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_APPL_ID, CM_DP_CHANNEL_ID,
-		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_PATH,
+		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_APPL_ID, CM_DP_CHANNEL_ID,
+		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_PATH,
 				(sizeof (groupdescDataElements) /
 				 sizeof (struct cm_dm_data_element)),
 				&(groupdescDataElements[0]));
@@ -688,8 +688,8 @@ if (return_value != OF_SUCCESS)
 
 //Bucket
 	return_value =
-		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_APPL_ID,CM_DP_CHANNEL_ID,
-		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_PATH,
+		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_APPL_ID,CM_DP_CHANNEL_ID,
+		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_PATH,
 				(sizeof (bucketDataElements) /
 				 sizeof (struct cm_dm_data_element)),
 				&(bucketDataElements[0]));
@@ -702,8 +702,8 @@ if (return_value != OF_SUCCESS)
 //Actions
 
 	return_value =
-		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_ACTION_APPL_ID,CM_DP_CHANNEL_ID,
-		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_BUCKET_ACTION_PATH,
+		cm_dm_register_data_elements (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_ACTION_APPL_ID,CM_DP_CHANNEL_ID,
+		                CM_DM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_BUCKET_ACTION_PATH,
 				(sizeof (actionDataElements) /
 				 sizeof (struct cm_dm_data_element)),
 				&(actionDataElements[0]));

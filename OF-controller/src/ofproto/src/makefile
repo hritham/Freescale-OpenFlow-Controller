@@ -37,7 +37,7 @@ OBJS =  $(BIN_DIR)/main.o \
 	$(BIN_DIR)/crmiface.o \
 	$(BIN_DIR)/ttp.o \
 	$(BIN_DIR)/nsrm.o \
-	$(BIN_DIR)/ctlrxml.o \
+	$(BIN_DIR)/ctlrxml.o 
 
 ifneq (,$(findstring CNTRL_INFRA_LIB_SUPPORT,$(CFLAGS)))
 else

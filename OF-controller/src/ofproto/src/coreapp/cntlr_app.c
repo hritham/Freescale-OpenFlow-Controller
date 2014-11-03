@@ -34,10 +34,11 @@
 #include "cntlr_event.h"
 #include "dprmldef.h"
 #include "of_msgapi.h"
+#include "of_proto.h"
 #include "multi_part.h"
 #include "fsl_ext.h"
 
-#define OPENFLOW_IPSEC_SUPPORT
+//#define OPENFLOW_IPSEC_SUPPORT
 //#define of_debug printf
 
 #define OF_DEFAULT_SW_MISS_SEND_LEN  128

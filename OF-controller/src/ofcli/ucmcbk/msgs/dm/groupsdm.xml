@@ -4,8 +4,8 @@
 	 <InstallPath>on_director.datapath.groups</InstallPath>
 
 		<DataModelNode>
-			<InstallPath>group</InstallPath>
-			<Name>group</Name>
+			<InstallPath>groupdesc</InstallPath>
+			<Name>groupdesc</Name>
 			<FriendlyName>Group Record</FriendlyName>
 			<NodeID/>
 			<Description>Group Description</Description>
@@ -27,6 +27,7 @@
 				 <AccessControl>CM_ACCESS_ALL</AccessControl>
 				 <GroupedScalar>FALSE</GroupedScalar>
 				 <GlobalTrans>TRUE</GlobalTrans>
+				 <!--GlobalTrans>FALSE</GlobalTrans-->
 				 <UseParentTrans>FALSE</UseParentTrans>
 			</NodeAttributes>
 			<DataAttributes>

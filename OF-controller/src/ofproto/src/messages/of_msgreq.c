@@ -203,8 +203,6 @@ void of_ipopts_config_response_cbk_fn(uint64_t  controller_handle,
 #ifdef CNTRL_OFCLI_SUPPORT
   cntrl_ucm_send_multipart_response(OFPMP_IPOPTS_DESC, switch_config, TRUE);
 #endif
-  if(msg != NULL)
-    msg->desc.free_cbk(msg);
 }
 
 int32_t cntlr_send_group_desc_request(uint64_t datapath_handle)
@@ -263,21 +261,32 @@ void of_group_desc_reply_cbk_fn (struct of_msg *msg,
 {
   struct ofi_action *action_p;
   struct ofi_bucket *bucket_entry_p;
+  struct ofi_bucket_prop *bucket_prop_entry_p;
 
   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered ...calling ucm handlers");
 #ifdef CNTRL_OFCLI_SUPPORT
   cntrl_ucm_send_multipart_response(OFPMP_GROUP_DESC, group_desc_p, more_groups);
 #endif
-  if(msg != NULL)
-    msg->desc.free_cbk(msg);
 
   if (group_desc_p)
   {
-    OF_LIST_REMOVE_HEAD_AND_SCAN(group_desc_p->bucket_list, bucket_entry_p,struct ofi_bucket *,OF_BUCKET_LISTNODE_OFFSET)
-    {
-      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"deleting bucket");
-      OF_LIST_REMOVE_HEAD_AND_SCAN(bucket_entry_p->action_list,action_p,struct ofi_action *,OF_ACTION_LISTNODE_OFFSET);
-    }
+   if (OF_LIST_COUNT(group_desc_p->bucket_list) > 0)
+   {
+     /*if (!(bucket_entry_p->action_list) && 
+             (OF_LIST_COUNT(bucket_entry_p->action_list) > 0))
+     {
+        OF_LIST_REMOVE_HEAD_AND_SCAN(bucket_entry_p->action_list, 
+                   action_p,struct ofi_action *,OF_ACTION_LISTNODE_OFFSET);
+     }
+     if (!(bucket_entry_p->bucket_prop_list) && 
+                   (OF_LIST_COUNT(bucket_entry_p->bucket_prop_list) > 0))
+     {
+        OF_LIST_REMOVE_HEAD_AND_SCAN(bucket_entry_p->bucket_prop_list, bucket_prop_entry_p, 
+                         struct ofi_bucket_prop *, OF_BUCKET_PROP_LISTNODE_OFFSET);
+     }*/
+     OF_LIST_REMOVE_HEAD_AND_SCAN(group_desc_p->bucket_list, bucket_entry_p,
+                      struct ofi_bucket *,OF_BUCKET_LISTNODE_OFFSET);
+   }
   }
 }
 
@@ -340,8 +349,6 @@ void of_group_stats_reply_cbk_fn( struct of_msg *msg,
 #ifdef CNTRL_OFCLI_SUPPORT
   cntrl_ucm_send_multipart_response(OFPMP_GROUP, group_stats, more_groups);
 #endif
-  if(msg != NULL)
-    msg->desc.free_cbk(msg);
 }
 
 int32_t cntlr_send_group_features_request(uint64_t datapath_handle)
@@ -401,8 +408,6 @@ void of_group_features_reply_cbk_fn( struct of_msg *msg,
 #ifdef CNTRL_OFCLI_SUPPORT
   cntrl_ucm_send_multipart_response(OFPMP_GROUP_FEATURES, group_features_p, TRUE);
 #endif
-  if(msg != NULL)
-    msg->desc.free_cbk(msg);
 }
 
 #if 0
@@ -714,7 +719,5 @@ void of_meter_stats_reply_cbk_fn( struct of_msg *msg,
 #ifdef CNTRL_OFCLI_SUPPORT
   cntrl_ucm_send_multipart_response(OFPMP_METER, meter_stats, more_meters);
 #endif
-  if(msg != NULL)
-    msg->desc.free_cbk(msg);
 }
 

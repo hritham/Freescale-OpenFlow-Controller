@@ -87,6 +87,13 @@ int32_t of_group_ucm_setmandparams (struct cm_array_of_iv_pairs *
     struct ofi_group_desc_info *group_info,
     struct cm_app_result ** app_result_pp);
 
+int32_t of_group_ucm_setoptparams (struct cm_array_of_iv_pairs *opt_iv_pairs,
+                                   struct ofi_bucket * bucket_info,
+                                   struct ofi_action * action_info,
+                                   struct ofi_bucket_prop *bucket_prop,
+                                   char *operation, uint8_t *afterbucketid,
+                                   struct cm_app_result ** app_result_pp);
+
 struct cm_dm_app_callbacks of_group_ucm_callbacks = 
 {
   of_group_starttrans,
@@ -102,6 +109,7 @@ struct cm_dm_app_callbacks of_group_ucm_callbacks =
 };
 
 uint32_t transId_g=0;
+uint8_t bNodeExists_g=FALSE;
 of_list_t group_trans_list_g={};
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -116,7 +124,7 @@ int32_t of_group_appl_ucmcbk_init (void)
   int32_t return_value;
 
   CM_CBK_DEBUG_PRINT ("Entered");
-  return_value=cm_register_app_callbacks (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUP_APPL_ID,
+  return_value=cm_register_app_callbacks (CM_ON_DIRECTOR_DATAPATH_GROUPS_GROUPDESC_APPL_ID,
       &of_group_ucm_callbacks);
   if(return_value != OF_SUCCESS)
   {
@@ -167,6 +175,7 @@ void* of_group_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
   struct cm_app_result *group_result = NULL;
   uint64_t datapath_handle;
   int32_t return_value;
+  struct group_trans *trans_rec_entry_p=NULL;
   uchar8_t offset;
 
   CM_CBK_DEBUG_PRINT ("Entered");
@@ -196,18 +205,31 @@ void* of_group_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
     return NULL;
   }
 
+  OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
+  {
+    if (trans_rec_entry_p->group_id == group_info_p->group_id)
+    {
+       bNodeExists_g = TRUE;
+       CM_CBK_DEBUG_PRINT ("node already exists in the list");
+       /*Need to update Sub command id  */
+       return (void *)trans_rec_entry_p;
+    }
+  }
+
   OF_GROUP_GENERATE_TRANS_ID(transId_g);
   trans_rec=(struct group_trans *) calloc(1,sizeof(struct group_trans));  
   trans_rec->datapath_handle=datapath_handle;
   trans_rec->trans_id=transId_g;
   trans_rec->command_id=command_id;
   trans_rec->group_id=group_info_p->group_id;
+  trans_rec->group_type=group_info_p->group_type;
+  CM_CBK_DEBUG_PRINT ("group type = %d",group_info_p->group_type);
   switch (command_id)
   {
     case CM_CMD_ADD_PARAMS:
       trans_rec->sub_command_id=ADD_GROUP;
-#if 1
-      return_value =of_register_group(datapath_handle, group_info_p);
+#if 0
+      //return_value =of_register_group(datapath_handle, group_info_p);
       if (return_value != OF_SUCCESS)
       {
         CM_CBK_DEBUG_PRINT ("Group Addition Failed");
@@ -220,8 +242,8 @@ void* of_group_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
 
     case CM_CMD_SET_PARAMS:
       trans_rec->sub_command_id=MOD_GROUP;
-#if 1
-      return_value=of_group_unregister_buckets(datapath_handle, group_info_p->group_id);
+#if 0
+      //return_value=of_group_unregister_buckets(datapath_handle, group_info_p->group_id);
       if (return_value != OF_SUCCESS)
       {
         CM_CBK_DEBUG_PRINT ("Group Modification Failed");
@@ -236,8 +258,9 @@ void* of_group_starttrans(struct cm_array_of_iv_pairs   * key_iv_pairs,
       trans_rec->sub_command_id=DEL_GROUP;
       break;
   }
+  bNodeExists_g = FALSE;
   OF_APPEND_NODE_TO_LIST(group_trans_list_g,trans_rec,offset);
-    CM_CBK_DEBUG_PRINT ("node appended to list");
+  CM_CBK_DEBUG_PRINT ("node appended to list");
   return (void *)trans_rec;
 }
 
@@ -259,9 +282,20 @@ int32_t of_group_addrec (void * config_trans_p,
   struct ofi_group_desc_info group_info = { };
   struct dprm_datapath_general_info datapath_info={};
   uint64_t datapath_handle;
+  struct ofi_bucket bucket_info;
+  struct ofi_bucket_prop bucket_prop;
+  struct ofi_action action_info;
+  uint8_t afterbucketid;
+  char operation[30];
+  uchar8_t offset;
+  offset = OF_GROUP_TRANS_LISTNODE_OFFSET;
+  struct group_trans *trans_rec_entry_p=NULL;
 
   CM_CBK_DEBUG_PRINT ("Entered");
   of_memset (&group_info, 0, sizeof (struct ofi_group_desc_info));
+  of_memset (&action_info, 0, sizeof (struct ofi_action));
+  of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
+  of_memset (&bucket_prop, 0, sizeof (struct ofi_bucket_prop));
 
   if ((of_group_ucm_setmandparams (mand_iv_pairs,&datapath_info, &group_info, &group_result)) !=
       OF_SUCCESS)
@@ -271,7 +305,8 @@ int32_t of_group_addrec (void * config_trans_p,
     return OF_FAILURE;
   }
 
-  return_value =of_group_ucm_setoptparams (opt_iv_pairs, &group_info, &group_result);
+  return_value = of_group_ucm_setoptparams (opt_iv_pairs, &bucket_info, &action_info, 
+                 &bucket_prop, operation, &afterbucketid, &group_result);
   if (return_value != OF_SUCCESS)
   {
     CM_CBK_DEBUG_PRINT ("Set Optional Parameters Failed");
@@ -287,7 +322,19 @@ int32_t of_group_addrec (void * config_trans_p,
     *result_pp = group_result;
     return OF_FAILURE;
   }
-  return_value =of_update_group(datapath_handle, &group_info);
+  OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
+  {
+    if (trans_rec_entry_p->group_id == group_info.group_id)
+    {
+       CM_CBK_DEBUG_PRINT ("node already exists in the list");
+       trans_rec_entry_p->group_type = group_info.group_type;
+       break;
+    }
+  }
+  return_value = of_frame_and_send_add_group_info(datapath_handle, &group_info, 
+                                 &bucket_info, &bucket_prop, &action_info);
+  /*return_value = of_frame_and_send_add_group_info(datapath_handle, &group_info, 
+                                                    NULL, NULL, NULL);*/
   if (return_value != OF_SUCCESS)
   {
     CM_CBK_DEBUG_PRINT ("Group Addition Failed");
@@ -314,10 +361,17 @@ int32_t of_group_setrec (void * config_trans_p,
   int32_t return_value = OF_FAILURE;
   struct ofi_group_desc_info group_info = { };
   struct dprm_datapath_general_info datapath_info={};
+  struct ofi_bucket_prop bucket_prop;
   uint64_t datapath_handle;
+  struct ofi_bucket bucket_info;
+  struct ofi_action action_info;
+  uint8_t afterbucketid;
+  char operation[30];
 
   CM_CBK_DEBUG_PRINT ("Entered");
   of_memset (&group_info, 0, sizeof (struct ofi_group_desc_info));
+  of_memset (&action_info, 0, sizeof (struct ofi_action));
+  of_memset (&bucket_info, 0, sizeof (struct ofi_bucket));
 
   if ((of_group_ucm_setmandparams (mand_iv_pairs,&datapath_info, &group_info, &group_result)) !=
       OF_SUCCESS)
@@ -327,42 +381,39 @@ int32_t of_group_setrec (void * config_trans_p,
     return OF_FAILURE;
   }
 
-  return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
+  return_value =of_group_ucm_setoptparams (opt_iv_pairs, &bucket_info, &action_info, 
+                       &bucket_prop, operation, &afterbucketid, &group_result);
   if (return_value != OF_SUCCESS)
   {
-    CM_CBK_DEBUG_PRINT ("Error: datapath does not exist with id %llx",datapath_info.dpid);
-    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DATAPATH_DOESNOT_EXIST);
-    *result_pp = group_result;
-    return OF_FAILURE;
-  }
-
-  return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
-  if (return_value != OF_SUCCESS)
-  {
-    CM_CBK_DEBUG_PRINT ("Error: datapath does not exist with id %llx",datapath_info.dpid);
-    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DATAPATH_DOESNOT_EXIST);
-    *result_pp = group_result;
-    return OF_FAILURE;
-  }
-#if 0
-  return_value=of_group_unregister_buckets(datapath_handle, group_info.group_id);
-  if (return_value != OF_SUCCESS)
-  {
-    CM_CBK_DEBUG_PRINT ("Error: group does not exist with name %d",group_info.group_id);
-    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DOESNOT_EXIST);
+    CM_CBK_DEBUG_PRINT ("Set Optional Parameters Failed");
     *result_pp =group_result;
     return OF_FAILURE;
   }
-#endif
 
-  return_value =of_update_group(datapath_handle, &group_info);
+  return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
+  if (return_value != OF_SUCCESS)
+  {
+    CM_CBK_DEBUG_PRINT ("Error: datapath does not exist with id %llx",datapath_info.dpid);
+    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DATAPATH_DOESNOT_EXIST);
+    *result_pp = group_result;
+    return OF_FAILURE;
+  }
+
+  /*if (strcmp(operation, "insert") == 0)
+    return_value = of_frame_and_send_mod_group_bucket_info(datapath_handle, &group_info, 
+                                          &bucket_info, &bucket_prop, &action_info);
+  else if (strcmp(operation, "remove") == 0)
+    return_value = of_frame_and_send_del_bucket_info(datapath_handle, &group_info, &bucket_info);
+  else
+    return OF_FAILURE;
+  //return_value =of_update_group(datapath_handle, &group_info);
   if (return_value != OF_SUCCESS)
   {
     CM_CBK_DEBUG_PRINT ("Group Addition Failed");
     fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_ADD_FAILED);
     *result_pp =group_result;
     return OF_FAILURE;
-  }
+  }*/
   return OF_SUCCESS;
 }
 
@@ -382,6 +433,10 @@ int32_t of_group_delrec (void * config_trans_p,
   struct ofi_group_desc_info group_info = { };
   struct dprm_datapath_general_info datapath_info={};
   uint64_t datapath_handle;
+  struct group_trans *trans_rec=config_trans_p;
+  struct group_trans *trans_rec_entry_p=NULL, *prev_trans_rec_p=NULL;
+  uchar8_t offset;
+  offset=  OF_GROUP_TRANS_LISTNODE_OFFSET;
 
   CM_CBK_DEBUG_PRINT ("Entered");
   of_memset (&group_info, 0, sizeof (struct ofi_group_desc_info));
@@ -395,6 +450,38 @@ int32_t of_group_delrec (void * config_trans_p,
     return OF_FAILURE;
   }
 
+  return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
+  if (return_value != OF_SUCCESS)
+  {
+    CM_CBK_DEBUG_PRINT ("Error: datapath does not exist with id %llx",datapath_info.dpid);
+    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DATAPATH_DOESNOT_EXIST);
+    *result_pp = group_result;
+    return OF_FAILURE;
+  }
+
+  return_value = of_frame_and_send_delete_group(datapath_handle, group_info.group_id);
+  
+  if (return_value != OF_SUCCESS)
+  {
+    CM_CBK_DEBUG_PRINT ("Error: Delete group failed %d",  group_info.group_id);
+    fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DOESNOT_EXIST);
+    *result_pp = group_result;
+    return OF_FAILURE;
+  }
+
+  OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
+  {
+    if ((trans_rec_entry_p->trans_id == trans_rec->trans_id ) && 
+                 (trans_rec_entry_p->group_id == group_info.group_id))
+    {
+      OF_REMOVE_NODE_FROM_LIST(  group_trans_list_g, trans_rec_entry_p,  prev_trans_rec_p, offset );
+      CM_CBK_DEBUG_PRINT ("trans rec removed from list and freed");
+      free(trans_rec_entry_p);
+      break;
+    }
+    prev_trans_rec_p=trans_rec_entry_p;
+  }
+ 
   return OF_SUCCESS;
 }
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -427,9 +514,9 @@ int32_t  of_group_endtrans(void *config_trans_p,
     case CM_CMD_CONFIG_SESSION_REVOKE:
       CM_CBK_DEBUG_PRINT ("Revoke command");
 
-      if (trans_rec->sub_command_id==ADD_GROUP)
+      /*if (trans_rec->sub_command_id==ADD_GROUP)
       {
-        return_value=of_unregister_group(trans_rec->datapath_handle, trans_rec->group_id);
+        //return_value=of_unregister_group(trans_rec->datapath_handle, trans_rec->group_id);
         if (return_value != OF_SUCCESS)
         {
           CM_CBK_DEBUG_PRINT ("Error: group does not exist with id %d",trans_rec->group_id);
@@ -437,14 +524,17 @@ int32_t  of_group_endtrans(void *config_trans_p,
           *result_pp =group_result;
           return OF_FAILURE;
         }
-      }
+      }*/
       OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *,offset)
       {
         if (trans_rec_entry_p->trans_id == trans_rec->trans_id )
         {
-          CM_CBK_DEBUG_PRINT ("trans rec removed from list and freed");
-          OF_REMOVE_NODE_FROM_LIST(  group_trans_list_g, trans_rec_entry_p,  prev_trans_rec_p, offset);
-          free(trans_rec_entry_p);
+          if (bNodeExists_g == FALSE)
+          {
+            CM_CBK_DEBUG_PRINT ("trans rec removed from list and freed");
+            OF_REMOVE_NODE_FROM_LIST(  group_trans_list_g, trans_rec_entry_p,  prev_trans_rec_p, offset);
+            free(trans_rec_entry_p);
+          }
           break;
         }
         prev_trans_rec_p=trans_rec_entry_p;
@@ -454,44 +544,8 @@ int32_t  of_group_endtrans(void *config_trans_p,
 
     case CM_CMD_CONFIG_SESSION_COMMIT:
       CM_CBK_DEBUG_PRINT ("Commit command");
-      /* need to send group add message to switch */
-      return_value=of_group_frame_and_send_message_request(trans_rec->datapath_handle, trans_rec->group_id, trans_rec->sub_command_id);
-      if (return_value != OF_SUCCESS)
-      {
-        CM_CBK_DEBUG_PRINT ("Error: of_group_frame_and_send_message_request failed");
-	if(return_value == OF_GROUP_WEIGHT_PARAM_REQUIRED){
-        fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_WEIGHT_REQUIRED);
-        *result_pp =group_result;
-	}
-	else if(return_value == OF_GROUP_WATCH_PORT_OR_GROUP_REQUIRED){
-		fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_WATCH_PORT_OR_GROUP_REQUIRED);
-        *result_pp =group_result;
-	}
-	else if(return_value == OF_GROUP_BUCKET_LIMIT_EXCEEDED){
-        fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_BUCKET_LIMIT_EXCEEDED);
-        *result_pp =group_result;
-	}
-	else{
-        fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_ADD_TO_SWITCH_FAILED);
-        *result_pp =group_result;
-	}
-        return OF_FAILURE;
-      }
-
-
       if (trans_rec->sub_command_id==DEL_GROUP)
       {
-        return_value=of_unregister_group(trans_rec->datapath_handle, trans_rec->group_id);
-        if (return_value != OF_SUCCESS)
-        {
-          CM_CBK_DEBUG_PRINT ("Error: group does not exist with id %d",trans_rec->group_id);
-          fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_DOESNOT_EXIST);
-          *result_pp =group_result;
-          return OF_FAILURE;
-        }
-
-      }
-
       OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
       {
         if (trans_rec_entry_p->trans_id == trans_rec->trans_id )
@@ -502,6 +556,7 @@ int32_t  of_group_endtrans(void *config_trans_p,
           break;
         }
         prev_trans_rec_p=trans_rec_entry_p;
+      }
       }
       break;
 
@@ -593,6 +648,10 @@ int32_t of_group_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
   struct ofi_group_desc_info group_info={};
   struct dprm_datapath_general_info datapath_info={};
   uint64_t datapath_handle;
+  struct group_trans *trans_rec_entry_p=NULL, *prev_trans_rec_p=NULL;
+  uchar8_t offset;
+  offset=  OF_GROUP_TRANS_LISTNODE_OFFSET;
+
 
   CM_CBK_DEBUG_PRINT ("Entered");
 
@@ -604,38 +663,34 @@ int32_t of_group_getexactrec (struct cm_array_of_iv_pairs * key_iv_pairs,
     return OF_FAILURE;
   }
 
-  return_value=dprm_get_datapath_handle(datapath_info.dpid, &datapath_handle);
-  if (return_value != OF_SUCCESS)
-  {
-    CM_CBK_DEBUG_PRINT ("Error: datapath does not exist with id %llx",datapath_info.dpid);
-    return OF_FAILURE;
-  }
+      OF_LIST_SCAN(group_trans_list_g, trans_rec_entry_p, struct group_trans *, offset) 
+      {
+        if (trans_rec_entry_p != NULL)
+        {
+           CM_CBK_DEBUG_PRINT("trans_rec_entry_p->group_id = %d :: group_info.group_id=%d",trans_rec_entry_p->group_id, group_info.group_id);
+           if (trans_rec_entry_p->group_id == group_info.group_id)
+           {
+              result_iv_pairs_p =
+               (struct cm_array_of_iv_pairs *) of_calloc (1, sizeof (struct cm_array_of_iv_pairs));
+             if (result_iv_pairs_p == NULL)
+             {
+               CM_CBK_DEBUG_PRINT ("Memory allocation failed for result_iv_pairs_p");
+               return OF_FAILURE;
+             }
 
-  return_value=of_get_group(datapath_handle, group_info.group_id, &group_entry_p);
-  if ( return_value != OF_SUCCESS)
-  {
-    CM_CBK_DEBUG_PRINT ("of_get_group failed");
-    return OF_FAILURE;
-  }
+             return_value=of_group_ucm_getparams (&group_info, &result_iv_pairs_p[0]);
+             if ( return_value != OF_SUCCESS)
+             {
+               CM_CBK_DEBUG_PRINT ("of_group_ucm_getparams failed");
+               return OF_FAILURE;
+             } 
 
-  result_iv_pairs_p =
-    (struct cm_array_of_iv_pairs *) of_calloc (1, sizeof (struct cm_array_of_iv_pairs));
-  if (result_iv_pairs_p == NULL)
-  {
-    CM_CBK_DEBUG_PRINT ("Memory allocation failed for result_iv_pairs_p");
-    return OF_FAILURE;
-  }
-
-  return_value=of_group_ucm_getparams (group_entry_p, &result_iv_pairs_p[0]);
-  if ( return_value != OF_SUCCESS)
-  {
-    CM_CBK_DEBUG_PRINT ("of_group_ucm_getparams failed");
-    return OF_FAILURE;
-  } 
-
-  *result_iv_pairs_pp = result_iv_pairs_p;
-
-  return OF_SUCCESS;
+            *result_iv_pairs_pp = result_iv_pairs_p;
+             return OF_SUCCESS;
+           }
+        }
+      }
+  return OF_FAILURE;
 
 }
 
@@ -677,7 +732,7 @@ int32_t of_group_ucm_setmandparams (struct cm_array_of_iv_pairs *
         CM_CBK_DEBUG_PRINT ("group id is %d", group_id);
         break;
 
-      case CM_DM_GROUPDESC_TYPE_ID:
+      case CM_DM_GROUPDESC_GROUPTYPE_ID:
         group_type = ((char *) mand_iv_pairs->iv_pairs[mand_param_cnt].value_p);
 	group_type_len = mand_iv_pairs->iv_pairs[mand_param_cnt].value_length;
 	if(!strncmp(group_type,"all",group_type_len)){
@@ -689,7 +744,7 @@ int32_t of_group_ucm_setmandparams (struct cm_array_of_iv_pairs *
 	else if(!strncmp(group_type,"indirect",group_type_len)){
  	       group_info->group_type=OFPGT_INDIRECT;
 	}
-	else if(!strncmp(group_type,"fastfailover",group_type_len)){
+	else if(!strncmp(group_type,"ff",group_type_len)){
  	       group_info->group_type=OFPGT_FF;
 	}
 	else {
@@ -731,14 +786,14 @@ int32_t of_group_ucm_validatemandparams (struct cm_array_of_iv_pairs *
         group_id=of_atoi((char *) mand_iv_pairs->iv_pairs[mand_param_cnt].value_p);
         CM_CBK_DEBUG_PRINT ("group id is %d", group_id);
         break;
-      case CM_DM_GROUPDESC_TYPE_ID:
+      case CM_DM_GROUPDESC_GROUPTYPE_ID:
         type=((char *) mand_iv_pairs->iv_pairs[mand_param_cnt].value_p);
 	group_type_len = mand_iv_pairs->iv_pairs[mand_param_cnt].value_length;
         CM_CBK_DEBUG_PRINT ("type is %s", type);
         if ((strncmp(type,"all",group_type_len) 
 		&& strncmp(type,"select",group_type_len) 
 		&& strncmp(type,"indirect",group_type_len) 
-		&& strncmp(type,"fastfailover",group_type_len)))
+		&& strncmp(type,"ff",group_type_len)))
         {
           CM_CBK_DEBUG_PRINT ("group type is not valid");
           fill_app_result_struct (&group_result, NULL, CM_GLU_GROUP_TYPE_INVALID);
@@ -760,13 +815,20 @@ int32_t of_group_ucm_validatemandparams (struct cm_array_of_iv_pairs *
  * Output:
  * Result:
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-int32_t of_group_ucm_setoptparams (struct cm_array_of_iv_pairs *
-    opt_iv_pairs,
-    struct ofi_group_desc_info * group_info,
-    struct cm_app_result ** app_result_pp)
+int32_t of_group_ucm_setoptparams (struct cm_array_of_iv_pairs *opt_iv_pairs,
+                                   struct ofi_bucket * bucket_info,
+                                   struct ofi_action * action_info,
+                                   struct ofi_bucket_prop *bucket_prop,
+                                   char *operation, uint8_t *afterbucketid,
+                                   struct cm_app_result ** app_result_pp)
 {
-  uint32_t uiOptParamCnt;
+  uint32_t uiOptParamCnt,max_len,ttl,ether_type,group_id,queue_id;
   uint8_t switch_type;
+  char *data;
+  char *action_type;
+  uint32_t action_type_len;
+  char *insert_position;
+  uint32_t position_len;
 
   CM_CBK_DEBUG_PRINT ("Entered");
 
@@ -774,8 +836,139 @@ int32_t of_group_ucm_setoptparams (struct cm_array_of_iv_pairs *
   {
     switch (opt_iv_pairs->iv_pairs[uiOptParamCnt].id_ui)
     {
-      default:
+       case  CM_DM_GROUPDESC_BUCKETID_ID:
+      	      bucket_info->bucket_id=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+      	      CM_CBK_DEBUG_PRINT ("bucket id %d", bucket_info->bucket_id);
+       break;
+
+       /*case  CM_DM_GROUPDESC_BUCKETOPERATION_ID:
+      	      strcpy(operation, (char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+      	      CM_CBK_DEBUG_PRINT ("bucket operation %s", operation);
+       break;*/
+
+       case CM_DM_GROUPDESC_WEIGHT_ID:
+              bucket_prop->weight=(uint16_t)of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+	     CM_CBK_DEBUG_PRINT ("weight  %d", bucket_prop->weight);
+	break;
+
+	case CM_DM_GROUPDESC_WATCH_PORT_ID:
+		bucket_prop->watch_port=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		CM_CBK_DEBUG_PRINT ("watch_port  %d", bucket_prop->watch_port);
+	break;
+	case CM_DM_GROUPDESC_WATCH_GROUP_ID:
+		bucket_prop->watch_group=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		CM_CBK_DEBUG_PRINT ("watch_group  %d", bucket_prop->watch_group);
+	break;
+
+	case CM_DM_GROUPDESC_PORT_NO_ID:
+		data = (char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p;
+		if ((*data == '0') &&
+				((*(data+1) == 'x') || (*(data+1) == 'X')))
+		{
+			action_info->port_no = (uint32_t)atox_32(data+2);
+		}
+		else
+		{
+			action_info->port_no = (uint32_t)atoi(data);
+		}
+		CM_CBK_DEBUG_PRINT ("port_no  action_info->port_no %d", action_info->port_no );
+	break;
+
+	case CM_DM_GROUPDESC_MAX_LEN_ID:
+		max_len=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->max_len=(uint16_t ) max_len;
+		CM_CBK_DEBUG_PRINT ("max_len  %d action_info->max_len %d ", max_len,action_info->max_len);
+	break;
+
+	case CM_DM_GROUPDESC_TTL_ID:
+		ttl=ucm_uint8_from_str_ptr((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->ttl= ttl;
+		CM_CBK_DEBUG_PRINT ("ttl  %d action_info->ttl %d ", ttl,action_info->ttl);
+		break;
+
+	case CM_DM_GROUPDESC_ETHER_TYPE_ID:
+		ether_type=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->ether_type=(uint16_t ) ether_type;
+		CM_CBK_DEBUG_PRINT ("ether_type  %d action_info->ether_type %d ", ether_type,action_info->ether_type);
+		break;
+
+	case CM_DM_GROUPDESC_GROUPID_ID:
+		group_id=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->group_id= group_id;
+		CM_CBK_DEBUG_PRINT ("group_id  %d action_info->group_id %d ", group_id,action_info->group_id);
+	break;
+
+	case CM_DM_GROUPDESC_QUEUEID_ID:
+		queue_id=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_info->queue_id= queue_id;
+		CM_CBK_DEBUG_PRINT ("queue_id  %d action_info->queue_id %d ", queue_id,action_info->queue_id);
+	break;
+
+	case CM_DM_GROUPDESC_SETFIELDTYPE_ID:
+		if(action_info->type != OFPAT_SET_FIELD)
+		{
+			CM_CBK_DEBUG_PRINT("Action type is not set_field ");
+			return  OF_FAILURE;
+		}
+		if(of_group_set_action_setfield_type(action_info,
+			(int8_t *)opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,
+		opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length)!=OF_SUCCESS)
+		{
+			CM_CBK_DEBUG_PRINT("set action field type failed");
+			return OF_FAILURE;
+		}
+	break;
+
+	case CM_DM_GROUPDESC_SETFIELDVAL_ID:
+		if(action_info->type != OFPAT_SET_FIELD)
+		{
+			CM_CBK_DEBUG_PRINT("Action type is not set_field");
+			return OF_FAILURE;
+		}
+		if(of_group_set_action_setfieldtype_value(action_info,
+		   (int8_t *)opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p,
+		  opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length)!=OF_SUCCESS)
+		{
+			CM_CBK_DEBUG_PRINT("set action field type value failed!.");
+			return  OF_FAILURE;
+		}
+	break;
+	case  CM_DM_GROUPDESC_ACTIONTYPE_ID:
+		action_type=((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+		action_type_len = (opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length);
+		of_group_set_action_type(action_info,action_type,action_type_len);
+
+		//action_info->type=(uint16_t )action_type;
+		CM_CBK_DEBUG_PRINT ("action type %d %s ",action_info->type,action_type);
+         break;
+
+      /*case CM_DM_GROUPDESC_INSERTPOSITION_ID:
+           insert_position = ((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+           position_len = opt_iv_pairs->iv_pairs[uiOptParamCnt].value_length;
+	   if(!strncmp(insert_position,"first",position_len)){
+ 	        //afterbucketid=OFPG_BUCKET_FIRST;
+	   }
+	   else if(!strncmp(insert_position,"last",position_len)){
+ 	       //afterbucketid=OFPG_BUCKET_LAST;
+	   }
+	   else if(!strncmp(insert_position,"afterbucket",position_len)){
+ 	       //group_info->group_type=OFPGT_INDIRECT;
+	   }
+	   else {
+		CM_CBK_DEBUG_PRINT ("Insert position is not valid");
+	   }
+           CM_CBK_DEBUG_PRINT ("Insert position is %s", insert_position);
         break;
+
+	case CM_DM_GROUPDESC_AFTERBUCKETID_ID:
+            afterbucketid=of_atoi((char *) opt_iv_pairs->iv_pairs[uiOptParamCnt].value_p);
+	    CM_CBK_DEBUG_PRINT ("after bucket id = %d ", afterbucketid);
+	break;*/
+
+	default:
+		CM_CBK_DEBUG_PRINT ("Invalid option");
+                return OF_FAILURE;
+
     }
   }
 
@@ -799,6 +992,7 @@ int32_t of_group_ucm_getparams (struct ofi_group_desc_info *group_entry_p,
   int32_t index = 0, jj, count_ui, iIndex;
 
   struct ofi_bucket *bucket_entry_p;
+  struct ofi_bucket_prop *bucket_prop_entry_p;
   struct ofi_action *action_entry_p;
   int32_t watch_port, watch_group;
   int32_t no_of_actions, i;
@@ -859,7 +1053,7 @@ int32_t of_group_ucm_getparams (struct ofi_group_desc_info *group_entry_p,
 #define CM_GROUPDESC_CHILD_COUNT 20
   count_ui = CM_GROUPDESC_CHILD_COUNT;
 
-  //CM_CBK_DEBUG_PRINT ("Entered");
+  CM_CBK_DEBUG_PRINT ("Entered");
   result_iv_pairs_p->iv_pairs = (struct cm_iv_pair*)of_calloc(count_ui, sizeof(struct cm_iv_pair));
   if(!result_iv_pairs_p->iv_pairs)
   {
@@ -874,42 +1068,59 @@ int32_t of_group_ucm_getparams (struct ofi_group_desc_info *group_entry_p,
 
   of_memset(string, 0, sizeof(string));
   of_sprintf(string,"%s",group_types[group_entry_p->group_type]);
-  FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_TYPE_ID,CM_DATA_TYPE_STRING, string);
+  FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_GROUPTYPE_ID,CM_DATA_TYPE_STRING, string);
   index++;
 
   of_memset(string, 0, sizeof(string));
   of_sprintf(string,"%d\n",OF_LIST_COUNT(group_entry_p->bucket_list));
   FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_BUCKET_COUNT_ID,CM_DATA_TYPE_STRING, string);
   index++;
-  OF_LIST_SCAN(group_entry_p->bucket_list, bucket_entry_p, struct ofi_bucket *, OF_BUCKET_LISTNODE_OFFSET)
+
+  if (OF_LIST_COUNT(group_entry_p->bucket_list) > 0 )
   {
-    of_memset(string, 0, sizeof(string));
-    switch(group_entry_p->group_type)
+
+    OF_LIST_SCAN(group_entry_p->bucket_list, bucket_entry_p, struct ofi_bucket *, OF_BUCKET_LISTNODE_OFFSET)
     {
-      case  OFPGT_ALL: /* All (multicast/broadcast) group.  */
-        of_strcpy(string,"-");
-        break;
+       of_memset(string, 0, sizeof(string));
+       of_itoa (bucket_entry_p->bucket_id, string);
+       FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index], CM_DM_GROUPDESC_BUCKETID_ID, CM_DATA_TYPE_STRING, string);
+       index++;
 
-      case OFPGT_SELECT: /* Select group. */
-        weight=bucket_entry_p->weight;
-        of_sprintf(string,"weight=%d",weight);
-        break;
+    if (OF_LIST_COUNT(bucket_entry_p->bucket_prop_list) > 0 )
+    {
+      OF_LIST_SCAN(bucket_entry_p->bucket_prop_list, bucket_prop_entry_p, struct ofi_bucket_prop *, OF_BUCKET_PROP_LISTNODE_OFFSET)
+      {
+        i++;
+        of_memset(string, 0, sizeof(string));
+        switch(group_entry_p->group_type)
+        {
+          case  OFPGT_ALL: /* All (multicast/broadcast) group.  */
+            of_strcpy(string,"-");
+            break;
 
-      case OFPGT_INDIRECT: /* Indirect group. */
-        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"not supported");
-        of_strcpy(string,"-");
-        break;
+          case OFPGT_SELECT: /* Select group. */
+            weight=bucket_prop_entry_p->weight;
+            of_sprintf(string,"weight=%d",weight);
+            break;
 
-      case OFPGT_FF: /* fast failover group */
-        watch_port=bucket_entry_p->watch_port;
-        watch_group=bucket_entry_p->watch_group;
-        of_sprintf(string,"watch_port=%d watch_group=%d",watch_port, watch_group);
-        break;
+          case OFPGT_INDIRECT: /* Indirect group. */
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"not supported");
+            of_strcpy(string,"-");
+            break;
 
+          case OFPGT_FF: /* fast failover group */
+            watch_port=bucket_prop_entry_p->watch_port;
+            watch_group=bucket_prop_entry_p->watch_group;
+            of_sprintf(string,"watch_port=%d watch_group=%d",watch_port, watch_group);
+            break;
+
+        }
+        FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_BUCKETINFO_ID,CM_DATA_TYPE_STRING, string);
+        index++;
+
+      }
     }
-    FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_BUCKETINFO_ID,CM_DATA_TYPE_STRING, string);
-    index++;
-
+    
     of_memset(string, 0, sizeof(string));
     of_sprintf(string,"%d\n",OF_LIST_COUNT(bucket_entry_p->action_list));
     FILL_CM_IV_PAIR(result_iv_pairs_p->iv_pairs[index],CM_DM_GROUPDESC_ACTION_COUNT_ID,CM_DATA_TYPE_STRING, string);
@@ -1279,10 +1490,565 @@ case FSLXAT_SET_PHY_PORT_FIELD_CNTXT:
         index++;
       }
     }
+   }  
   }
   result_iv_pairs_p->count_ui = index;
 
   CM_CBK_PRINT_IVPAIR_ARRAY (result_iv_pairs_p);
   return OF_SUCCESS;
 }
+
+int32_t group_set_action_setfield_type(struct ofi_action *action_info,
+		    char *setfield_type, uint32_t setfield_len) 
+{                                       
+	   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ALL,"of_group_set_action_setfield_type Entered & set_field_type:%s ",setfield_type);                                     
+
+	   if (!strncmp(setfield_type, "srcIpV4Addr", setfield_len))
+	   {                             
+		   action_info->setfield_type = OFPXMT_OFB_IPV4_SRC;
+	   }                             
+	   else if (!strncmp(setfield_type, "dstIpV4Addr", setfield_len))
+	   {                                     
+		   action_info->setfield_type = OFPXMT_OFB_IPV4_DST;
+	   }                                             
+	   else if (!strncmp(setfield_type, "udpSrcPort", setfield_len))
+	   {                                     
+		   action_info->setfield_type = OFPXMT_OFB_UDP_SRC;
+	   }                                       
+	   else if (!strncmp(setfield_type, "udpDstPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_UDP_DST;
+	   }
+	   else if (!strncmp(setfield_type, "tcpSrcPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_TCP_SRC;
+	   }
+	   else if (!strncmp(setfield_type, "tcpDstPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_TCP_DST;
+	   }
+	   else if (!strncmp(setfield_type, "sctpSrcPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_SCTP_SRC;
+	   }
+	   else if (!strncmp(setfield_type, "sctpDstPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_SCTP_DST;
+	   }
+	   else if (!strncmp(setfield_type, "protocol", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IP_PROTO;
+	   }
+	   else if (!strncmp(setfield_type, "ethType", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ETH_TYPE;
+	   }
+	   else if (!strncmp(setfield_type, "srcMacAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ETH_SRC;
+	   }
+	   else if (!strncmp(setfield_type, "dstMacAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ETH_DST;
+	   }
+	   else if (!strncmp(setfield_type, "icmpType", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ICMPV4_TYPE;
+	   }
+	   else if (!strncmp(setfield_type, "icmpCode", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ICMPV4_CODE;
+	   }
+	   else if (!strncmp(setfield_type, "inPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IN_PORT;
+	   }
+	   else if (!strncmp(setfield_type, "inPhyPort", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IN_PHY_PORT;
+	   }
+	   else if (!strncmp(setfield_type, "tableMetaData", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_METADATA;
+	   }
+	   else if (!strncmp(setfield_type, "mplsLabel", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_MPLS_LABEL;
+	   }
+	   else if (!strncmp(setfield_type, "mplsTC", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_MPLS_TC;
+	   }
+	   else if (!strncmp(setfield_type, "mplsBos", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_MPLS_BOS;
+	   }
+	   else if (!strncmp(setfield_type, "pbbIsid", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_PBB_ISID;
+	   }
+	   else if (!strncmp(setfield_type, "tunnelId", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_TUNNEL_ID;
+	   }
+	   else if (!strncmp(setfield_type, "VlanId", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_VLAN_VID;
+	   }
+	   else if (!strncmp(setfield_type, "VlanPriority", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_VLAN_PCP;
+	   }
+	   else if (!strncmp(setfield_type, "arpSrcIpv4Addr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ARP_SPA;
+	   }
+	   else if (!strncmp(setfield_type, "arpDstIpv4Addr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ARP_TPA;
+	   }
+	   else if (!strncmp(setfield_type, "arpSrcMacAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ARP_SHA;
+	   }
+	   else if (!strncmp(setfield_type, "arpDstMacAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ARP_THA;
+	   }
+	   else if (!strncmp(setfield_type, "arpOpcode", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ARP_OP;
+	   }
+	   else if (!strncmp(setfield_type, "IpDiffServCodePointBits", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IP_DSCP;
+	   }
+	   else if (!strncmp(setfield_type, "IpECNBits", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IP_ECN;
+	   }
+	   else if (!strncmp(setfield_type, "srcIpv6Addr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_SRC;
+	   }
+	   else if (!strncmp(setfield_type, "dstIpv6Addr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_DST;
+	   }
+	   else if (!strncmp(setfield_type, "icmpv6Type", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ICMPV6_TYPE;
+	   }
+	   else if (!strncmp(setfield_type, "icmpv6Code", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_ICMPV6_CODE;
+	   }
+	   else if (!strncmp(setfield_type, "ipv6NDTarget", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_ND_TARGET;
+	   }
+	   else if (!strncmp(setfield_type, "ipv6NDSrcLinkLayerAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_ND_SLL;
+	   }
+	   else if (!strncmp(setfield_type, "ipv6NDTargetLinkLayerAddr", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_ND_TLL;
+	   }
+	   else if (!strncmp(setfield_type, "Ipv6flowlabel", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_FLABEL;
+	   }
+	   else if (!strncmp(setfield_type, "ipv6ExtnHdrPseudofield", setfield_len))
+	   {
+		   action_info->setfield_type = OFPXMT_OFB_IPV6_EXTHDR;
+	   }
+	   else
+	   {
+		   OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR, "Invalide set field type ....");
+		   return OF_FAILURE;
+	   }
+	   return OF_SUCCESS;
+}
+
+int32_t group_set_action_setfieldtype_value(struct ofi_action *action_info,
+		char *data, uint32_t data_len)
+{
+	int32_t retval = OF_SUCCESS;
+	uint32_t field_type = action_info->setfield_type;
+	OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ALL," of_flow_set_action_setfieldtype_value Entered & setfieldtype_value:%s",data);
+
+	do
+	{
+		switch (field_type)
+		{
+			case OFPXMT_OFB_IN_PORT: /* Switch input port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," OFPXMT_OFB_IN_PORT:");
+					action_info->ui32_data = (uint32_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "INPORT=%d",action_info->ui32_data);
+					break;
+				}
+			case OFPXMT_OFB_IN_PHY_PORT: /* Switch physical input port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_IN_PHY_PORT:");
+					action_info->ui32_data = (uint32_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "INPhy-port=%d",action_info->ui32_data);
+
+					break;
+				}
+			case OFPXMT_OFB_METADATA: /* Metadata passed between tables. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_METADATA:");
+					if ((*data == '0') && ((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui64_data = atox_64(data+2);
+					}
+					else
+					{
+						action_info->ui64_data = (uint64_t)atoll(data);
+					}
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "metadata=%llx",action_info->ui64_data);
+					break;
+				}
+			case OFPXMT_OFB_ETH_DST: /* Ethernet destination address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ETH_DST:");
+					if ((*data == '0') && ((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_ETH_SRC: /* Ethernet source address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ETH_SRC: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_ETH_TYPE: /* Ethernet frame type. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ETH_TYPE: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui16_data = (uint16_t)atox_32(data+2);
+					}
+					else
+					{
+						action_info->ui16_data = (uint16_t)atoi(data);
+					}
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"ethtype=%x",action_info->ui16_data);
+					break;
+				}
+			case OFPXMT_OFB_VLAN_VID: /* VLAN id. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_VLAN_VID: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_IP_PROTO: /* IP protocol. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_IP_PROTO: ");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "protocol=%d",action_info->ui8_data);
+					break;
+				}
+			case OFPXMT_OFB_IPV4_SRC: /* IPv4 source address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_IPV4_SRC: ");
+					action_info->ui32_data = (uint32_t)inet_network(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"src ip=%x",action_info->ui32_data);
+					break;
+				}
+			case OFPXMT_OFB_IPV4_DST: /* IPv4 destination address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_IPV4_DST: ");
+					action_info->ui32_data = (uint32_t)inet_network(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "dest-ip=%x",action_info->ui32_data);
+					break;
+				}
+			case OFPXMT_OFB_TCP_SRC: /* TCP source port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_TCP_SRC: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "tcp srcport=%d",action_info->ui16_data);
+					break;
+				}
+			case OFPXMT_OFB_TCP_DST: /* TCP destination port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_TCP_DST: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "tcp destport=%d",action_info->ui16_data);
+					break;
+				}
+			case OFPXMT_OFB_UDP_SRC: /* UDP source port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_UDP_SRC: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+
+					break;
+				}
+			case OFPXMT_OFB_UDP_DST: /* UDP destination port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_UDP_DST: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+
+					break;
+				}
+			case OFPXMT_OFB_SCTP_SRC: /* SCTP source port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_SCTP_SRC: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+
+					break;
+				}
+			case OFPXMT_OFB_SCTP_DST: /* SCTP destination port. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_SCTP_DST: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+
+					break;
+				}
+			case OFPXMT_OFB_ICMPV4_TYPE: /* ICMP type. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ICMPV4_TYPE:");
+					action_info->ui8_data = (uint8_t)atoi(data);
+
+					break;
+				}
+			case OFPXMT_OFB_ICMPV4_CODE: /* ICMP code. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ICMPV4_CODE: ");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "icmp-code=%d",action_info->ui8_data);
+					break;
+				}
+			case OFPXMT_OFB_ARP_OP: /* ARP opcode. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ARP_OP: ");
+					action_info->ui16_data = (uint16_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_MPLS_LABEL: /* MPLS label. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_MPLS_LABEL:");
+					action_info->ui32_data = (uint32_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_MPLS_TC: /* MPLS TC. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_MPLS_TC:");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_MPLS_BOS: /* MPLS BoS bit. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_MPLS_BOS:");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_PBB_ISID: /* PBB I-SID. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_PBB_ISID:");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_TUNNEL_ID: /* Logical Port Metadata. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_TUNNEL_ID:");
+					action_info->ui64_data = (uint64_t)atoll(data);
+					break;
+				}
+			case OFPXMT_OFB_VLAN_PCP:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_VLAN_PCP");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_ARP_SPA: /* IPv4 source address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ARP_SPA: ");
+					action_info->ui32_data = (uint32_t)inet_network(data);
+					break;
+				}
+			case OFPXMT_OFB_ARP_TPA: /* IPv4 source address. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ARP_TPA: ");
+					action_info->ui32_data = (uint32_t)inet_network(data);
+					break;
+				}
+			case OFPXMT_OFB_ARP_SHA:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_ARP_SHA: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_ARP_THA:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_ARP_THA: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_IP_DSCP:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IP_DSCP: ");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_IP_ECN:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IP_ECN: ");
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_IPV6_SRC:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_SRC");
+					if(inet_pton(AF_INET6, data, &(action_info->ipv6_addr.ipv6Addr32)) != 1)
+					{
+						OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "Invalid Ipv6 src address!. ");
+						return OF_FAILURE;
+					}
+					break;
+				}
+			case OFPXMT_OFB_IPV6_DST:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_DST");
+					if(inet_pton(AF_INET6, data, &(action_info->ipv6_addr.ipv6Addr32)) != 1)
+					{
+						OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "Invalid Ipv6 dst address!. ");
+						return OF_FAILURE;
+					}
+					break;
+				}
+			case OFPXMT_OFB_IPV6_FLABEL:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_FLABEL ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui32_data = (uint32_t)atox_32(data+2);
+					}
+					else
+					{
+						action_info->ui32_data = (uint32_t)atoi(data);
+					}
+					break;
+				}
+			case OFPXMT_OFB_ICMPV6_TYPE: /* ICMP type. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ICMPV6_TYPE:");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui8_data = (uint8_t)atox_32(data+2);
+					}
+					else
+					{
+						action_info->ui8_data = (uint8_t)atoi(data);
+					}
+					break;
+				}
+			case OFPXMT_OFB_ICMPV6_CODE: /* ICMP code. */
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"OFPXMT_OFB_ICMPV6_CODE: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui8_data = (uint8_t)atox_32(data+2);
+					}
+					else
+					{
+						action_info->ui8_data = (uint8_t)atoi(data);
+					}
+					action_info->ui8_data = (uint8_t)atoi(data);
+					break;
+				}
+			case OFPXMT_OFB_IPV6_ND_TARGET:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_ND_TARGET: ");
+
+					if(inet_pton(AF_INET6, data, &(action_info->ipv6_addr.ipv6Addr32)) != 1)
+					{
+						OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "Invalid Ipv6  address!. ");
+					}
+					break;
+				}
+			case OFPXMT_OFB_IPV6_ND_SLL: /* The source link-layer address option in an IPv6Neighbor Discovery message.*/                    
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_ND_SLL:");
+					if ((*data == '0') && ((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_IPV6_ND_TLL: /* The target link-layer address option in an IPv6Neighbor Discovery message.*/
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG," OFPXMT_OFB_IPV6_ND_TLL: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						of_flow_match_atox_mac_addr(data+2, action_info->ui8_data_array);
+					}
+					else
+					{
+						of_flow_match_atox_mac_addr(data, action_info->ui8_data_array);
+					}
+					break;
+				}
+			case OFPXMT_OFB_IPV6_EXTHDR:
+				{
+					OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG, "OFPXMT_OFB_IPV6_EXTHDR: ");
+					if ((*data == '0') &&
+							((*(data+1) == 'x') || (*(data+1) == 'X')))
+					{
+						action_info->ui16_data = (uint16_t)atox_32(data+2);
+					}
+					else
+					{
+						action_info->ui16_data = (uint16_t)atoi(data);
+					}
+					break;
+				}
+		}
+	}
+	while(0);
+
+	return retval;
+}
+
 #endif /*OF_CM_SUPPORT */

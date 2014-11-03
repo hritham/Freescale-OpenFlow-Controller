@@ -1553,12 +1553,13 @@ of_get_aggregate_flow_entries(struct of_msg *msg,
    return status;
 }
 
-   int32_t
+int32_t
 of_add_group(struct of_msg *msg,
-      uint64_t  datapath_handle,
-      uint32_t  group_id,
-      uint8_t   group_type,
-      void **conn_info_pp)
+             uint64_t  datapath_handle,
+             uint32_t  group_id,
+             uint8_t   group_type,
+             uint16_t  bucket_list_len,
+             void **conn_info_pp)
 {
    struct ofp_group_mod *group_mod;
    struct dprm_datapath_entry  *datapath;
@@ -1588,6 +1589,9 @@ of_add_group(struct of_msg *msg,
       group_mod->command  = htons(OFPGC_ADD);
       group_mod->type = group_type;
       group_mod->group_id = htonl(group_id);
+      group_mod->command_bucket_id = htonl(OFPG_BUCKET_ALL);
+      group_mod->bucket_list_len = htons(bucket_list_len);
+      //group_mod->bucket_list_len = htonl(bucket_list_len);
 
       msg->desc.data_len += (sizeof(struct ofp_group_mod));
       msg->desc.utils_ptr   = msg->desc.start_of_data + msg->desc.data_len;
@@ -1613,6 +1617,72 @@ of_add_group(struct of_msg *msg,
    CNTLR_RCU_READ_LOCK_RELEASE();
    return status;
 }
+
+int32_t
+of_insert_bucket_to_group(struct of_msg *msg,
+                          uint64_t  datapath_handle,
+                          uint32_t  group_id,
+                          uint8_t   group_type,
+                          uint32_t  command_bkt_id,
+                          uint16_t  bucket_list_len,
+                          void **conn_info_pp)
+{
+   struct ofp_group_mod *group_mod;
+   struct dprm_datapath_entry  *datapath;
+   int32_t  status = OFU_INSERT_BUCKET_TO_GROUP_SUCCESS;
+   int32_t  retval = OF_SUCCESS;
+   struct of_cntlr_conn_info *conn_info;
+
+   CNTLR_RCU_READ_LOCK_TAKE();
+   do
+   {
+      retval = get_datapath_byhandle(datapath_handle, &datapath);
+      if(retval  != DPRM_SUCCESS)
+      {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Error in getting datapath,Err=%d ",
+               retval);
+         status = DPRM_INVALID_DATAPATH_HANDLE;
+         break;
+      }
+
+      group_mod = (struct ofp_group_mod*)(msg->desc.start_of_data);
+
+
+      group_mod->header.version = OFP_VERSION;
+      group_mod->header.type    = OFPT_GROUP_MOD;
+      group_mod->header.xid     = 0;
+
+      group_mod->command  = htons(OFPGC_INSERT_BUCKET);
+      group_mod->type = group_type;
+      group_mod->group_id = htonl(group_id);
+      group_mod->command_bucket_id = htonl(command_bkt_id);
+      group_mod->bucket_list_len = htons(bucket_list_len);
+
+      msg->desc.data_len += (sizeof(struct ofp_group_mod));
+      msg->desc.utils_ptr   = msg->desc.start_of_data + msg->desc.data_len;
+      msg->desc.ptr1=  msg->desc.ptr2=  msg->desc.ptr3 =msg->desc.utils_ptr;
+      msg->desc.length1=  msg->desc.length2 =  msg->desc.length3=0;
+
+      if(!datapath->is_main_conn_present)
+      {
+	      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"main connection not present");
+	      status=OF_FAILURE;
+	      break;
+      }
+      CNTLR_GET_MAIN_CHANNEL_INFO(datapath,conn_info);
+      *conn_info_pp=conn_info;
+      if ( conn_info == NULL )
+      {
+	      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"conn info is null");
+	      status=OF_FAILURE;
+	      break;
+      }
+   }
+   while(0);
+   CNTLR_RCU_READ_LOCK_RELEASE();
+   return status;
+}
+
 
 int32_t
 of_cntrlr_send_request_message(struct of_msg *msg,
@@ -1663,12 +1733,13 @@ of_cntrlr_send_request_message(struct of_msg *msg,
    return status;
 }
 
-   int32_t
+int32_t
 of_modify_group(struct of_msg *msg,
-      uint64_t  datapath_handle,
-      uint32_t  group_id,
-      uint8_t   group_type,
-      void **conn_info_pp)
+               uint64_t  datapath_handle,
+               uint32_t  group_id,
+               uint8_t   group_type,
+               uint16_t  bucket_list_len,
+               void **conn_info_pp)
 {
    struct ofp_group_mod *group_mod;
    struct dprm_datapath_entry  *datapath;
@@ -1702,6 +1773,8 @@ of_modify_group(struct of_msg *msg,
       group_mod->command  = htons(OFPGC_MODIFY);
       group_mod->type = group_type;
       group_mod->group_id = htonl(group_id);
+      group_mod->command_bucket_id = htonl(OFPG_BUCKET_ALL);
+      group_mod->bucket_list_len = htons(bucket_list_len);
       //      group_mod->buckets = ; /* To BE DONE */
 
       msg->desc.data_len += (sizeof(struct ofp_group_mod));
@@ -1748,7 +1821,7 @@ of_delete_group(struct of_msg *msg,
    do
    {
       retval = get_datapath_byhandle(datapath_handle, &datapath);
-      if(retval  != DPRM_SUCCESS)
+      if((retval  != DPRM_SUCCESS) || (datapath == NULL ))
       {
          OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,
                "Error in getting datapath,Err=%d ",retval);
@@ -1764,6 +1837,7 @@ of_delete_group(struct of_msg *msg,
       group_mod->header.xid     = 0;
 
       group_mod->command  = htons(OFPGC_DELETE);
+      group_mod->command_bucket_id = htonl(OFPG_BUCKET_ALL);
       group_mod->group_id = htonl(group_id);
       //      group_mod->buckets = ; /* To BE DONE */
 
@@ -1773,13 +1847,16 @@ of_delete_group(struct of_msg *msg,
       msg->desc.utils_ptr   = msg->desc.start_of_data + msg->desc.data_len;
       msg->desc.ptr1=  msg->desc.ptr2=  msg->desc.ptr3 =msg->desc.utils_ptr;
       msg->desc.length1=  msg->desc.length2 =  msg->desc.length3=0;
-      if(!datapath->is_main_conn_present)
+      if (datapath != NULL)
       {
-         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"main connection not present");
-         status=OF_FAILURE;
-         break;
+        if(!datapath->is_main_conn_present)
+        {
+           OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"main connection not present");
+           status=OF_FAILURE;
+           break;
+        }
+        CNTLR_GET_MAIN_CHANNEL_INFO(datapath,conn_info);
       }
-      CNTLR_GET_MAIN_CHANNEL_INFO(datapath,conn_info);
       *conn_info_pp=conn_info;
       if ( conn_info == NULL )
       {
@@ -1793,6 +1870,70 @@ of_delete_group(struct of_msg *msg,
 
    return status;
 }
+
+int32_t
+of_remove_bucket_from_group(struct of_msg *msg,
+                          uint64_t  datapath_handle,
+                          uint32_t  group_id,
+                          uint8_t   group_type,
+                          uint32_t  command_bkt_id,
+                          void **conn_info_pp)
+{
+   struct ofp_group_mod *group_mod;
+   struct dprm_datapath_entry  *datapath;
+   int32_t  status = OFU_REMOVE_BUCKET_FROM_GROUP_SUCCESS;
+   int32_t  retval = OF_SUCCESS;
+   struct of_cntlr_conn_info *conn_info;
+
+   CNTLR_RCU_READ_LOCK_TAKE();
+   do
+   {
+      retval = get_datapath_byhandle(datapath_handle, &datapath);
+      if(retval  != DPRM_SUCCESS)
+      {
+         OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Error in getting datapath,Err=%d ",
+               retval);
+         status = DPRM_INVALID_DATAPATH_HANDLE;
+         break;
+      }
+
+      group_mod = (struct ofp_group_mod*)(msg->desc.start_of_data);
+
+
+      group_mod->header.version = OFP_VERSION;
+      group_mod->header.type    = OFPT_GROUP_MOD;
+      group_mod->header.xid     = 0;
+
+      group_mod->command  = htons(OFPGC_REMOVE_BUCKET);
+      group_mod->type = group_type;
+      group_mod->group_id = htonl(group_id);
+      group_mod->command_bucket_id = htonl(command_bkt_id);
+
+      msg->desc.data_len += (sizeof(struct ofp_group_mod));
+      msg->desc.utils_ptr   = msg->desc.start_of_data + msg->desc.data_len;
+      msg->desc.ptr1=  msg->desc.ptr2=  msg->desc.ptr3 =msg->desc.utils_ptr;
+      msg->desc.length1=  msg->desc.length2 =  msg->desc.length3=0;
+
+      if(!datapath->is_main_conn_present)
+      {
+	      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"main connection not present");
+	      status=OF_FAILURE;
+	      break;
+      }
+      CNTLR_GET_MAIN_CHANNEL_INFO(datapath,conn_info);
+      *conn_info_pp=conn_info;
+      if ( conn_info == NULL )
+      {
+	      OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"conn info is null");
+	      status=OF_FAILURE;
+	      break;
+      }
+   }
+   while(0);
+   CNTLR_RCU_READ_LOCK_RELEASE();
+   return status;
+}
+
 
 int32_t of_add_meter(struct of_msg *msg,
       uint64_t  datapath_handle,
@@ -2372,12 +2513,70 @@ of_create_delete_flow_entries_msg_of_table_with_strict_match( struct of_msg *msg
    return status;
 }
 
-   int32_t
+#if 0
+
+static inline void
+of_update_match_field_nw_byte_order(t_uint8 *dst_ptr,
+                                    t_uint8 *src_ptr,
+                                    t_uint16 length)
+{
+   switch(length)
+   {
+       case 2: *(t_uint16 *)dst_ptr = htons(*(t_uint16 *)src_ptr);
+               printf("%s 2 %x %x\r\n",__FUNCTION__, *(t_uint16 *)src_ptr,*(t_uint16 *)dst_ptr);
+               break;
+       case 4: *(t_uint32 *)dst_ptr = htonl(*(t_uint32 *)src_ptr);
+               printf("%s 4 %x %x\r\n",__FUNCTION__, *(t_uint32 *)src_ptr,*(t_uint32 *)dst_ptr);
+               break;
+       case 8: *(t_uint64 *)dst_ptr = htonll(*(t_uint64 *)src_ptr);
+               printf("%s 8 %x %x\r\n",__FUNCTION__, *(t_uint64 *)src_ptr,*(t_uint64 *)dst_ptr);
+               break;
+       default:
+           OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,"Match field len %d\n",length);
+   }
+}
+
+void
+build_pipeline_fields(ofp_match_t *destination_match,
+                      ofp_match_t *source_match,
+                      t_uint16  match_len)
+{
+    t_uint8    *match_src = source_match->oxm_fields;
+    t_uint8    *match_dst = destination_match->oxm_fields;
+    t_uint16    match_cnt = match_len;
+    t_uint32    hdr, fldlen;
+    t_uint16    total_len;
+
+    while (match_cnt > 0) {
+      hdr = *(t_uint32 *)match_src;
+      *(t_uint32 *)match_dst = htonl(hdr);
+      match_dst +=4; match_src +=4; match_cnt -=4;
+
+      fldlen = OXM_LENGTH(hdr);
+      if (OXM_HASMASK(hdr)) fldlen >>= 1;
+
+      of_update_match_field_nw_byte_order(match_dst,match_src,fldlen);
+      match_dst +=fldlen; match_src +=fldlen; match_cnt -=fldlen;
+
+     if (OXM_HASMASK(hdr)) {
+         of_update_match_field_nw_byte_order(match_dst,match_src,fldlen);
+         match_dst += fldlen; match_src += fldlen; match_cnt -= fldlen;
+     }
+   }
+   destination_match->length = htons(match_len);
+
+   total_len = round_up(match_len,8);
+   printf("%s Total Match field length %d\r\n",__FUNCTION__,total_len);
+   /*reset roundupbytes*/
+   //memset((uint8_t*)match_dst,0,(total_len - match_len));
+}
+#endif
+
+int32_t
 of_frame_pktout_msg(struct of_msg *msg,
       uint64_t       datapath_handle,
       uint8_t        reply_pkt,
       uint32_t       buffer_id,
-      uint32_t       in_port,
       uint8_t        channel_no,
       void **conn_info_pp
       )
@@ -2409,36 +2608,65 @@ of_frame_pktout_msg(struct of_msg *msg,
       pkt_out_msg->header.version = OFP_VERSION;
       pkt_out_msg->header.type    = OFPT_PACKET_OUT;
       pkt_out_msg->header.xid     = 0;
-      pkt_out_msg->in_port   = htonl(in_port);
 
       msg->desc.data_len += (OFU_PACKET_OUT_MESSAGE_LEN);
-      msg_desc->utils_ptr  = msg_desc->start_of_data + sizeof(struct ofp_packet_out);
-      msg_desc->ptr1= msg_desc->ptr2= msg_desc->ptr3=msg->desc.utils_ptr;
+
+      msg->desc.utils_ptr = &pkt_out_msg->match;
+
+      msg_desc->ptr1 = msg_desc->ptr2 = msg_desc->ptr3 = msg_desc->utils_ptr; 
       msg_desc->length1 = msg_desc->length2=msg_desc->length3=0;
 
       if(reply_pkt)
       {
          OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"REPLY");
-         pkt_out_msg->buffer_id = buffer_id;
+          printf("Buffer ID %d\r\n",buffer_id);
+         pkt_out_msg->buffer_id = htonl(buffer_id);
+#if 0
+         if(pipeline_fields_length)
+         {
+            if ((msg_desc->utils_ptr + pipeline_fields_length) >
+                (msg->desc.start_of_data + msg_desc->buffer_len))
+            {
+                OF_LOG_MSG(OF_LOG_MOD, OF_LOG_WARN,
+                "%s %d :Length of buffer is not sufficiant...\r\n",__FUNCTION__,__LINE__);
+                status = OFU_NO_ROOM_IN_BUFFER;
+                break;
+            }
+            build_pipeline_fields(&pkt_out_msg->match
+                                  (struct ofp_match*)pipeline_fields,
+                                  pipeline_fields_length);
+            /*Not converting to network byter, b'coz it is already
+              in network byte order*/
+           
+            memcpy(&pkt_out_msg->match.oxm_fields,
+                   pipeline_fields,
+                   pipeline_fields_length);  
+            printf("%s pipeline field length %d\r\n",__FUNCTION__,pipeline_fields_length);
+            pkt_out_msg->match.length = htons(pipeline_fields_length);
+            printf("%s pipeline field length nwbyte order %d\r\n",__FUNCTION__,pkt_out_msg->match.length);
+
+            msg_desc->utils_ptr += pipeline_fields_length; 
+            msg->desc.data_len  += pipeline_fields_length;
+         }
+#endif
          CNTLR_GET_GIVEN_CHANNEL_INFO(datapath,channel_no,conn_info);
-         if ( conn_info == NULL )
+         if (conn_info == NULL )
          {
             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,"getting channel info failed for channel no");
-            printf("Connection to the Datapath=%llx closed, Sending Packet out failed \r\n",datapath->dpid);
             status = CNTLR_CHN_CLOSED;
             break;
-
          }
          *conn_info_pp=conn_info;
       }
       else
       {
          OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"non reply");
-         pkt_out_msg->buffer_id = buffer_id;
+         pkt_out_msg->buffer_id    = buffer_id;
+         pkt_out_msg->match.length = 0;
          if(!datapath->is_main_conn_present)
          {
-            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR," Error in sending message to datapath,channel closed " );
-            printf("Connection to the Datapath=%llx closed, Sending Packet out failed \r\n",datapath->dpid);
+            OF_LOG_MSG(OF_LOG_MOD, OF_LOG_ERROR,
+             "Error in sending message to datapath,channel closed " );
             status = CNTLR_CHN_CLOSED;
             break;
          }
@@ -2447,13 +2675,13 @@ of_frame_pktout_msg(struct of_msg *msg,
          if ( conn_info == NULL )
          {
             OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"conn info is null");
-            printf("Connection to the Datapath=%llx closed, Sending Packet out failed \r\n",datapath->dpid);
             status=OF_FAILURE;
             break;
          }
          *conn_info_pp=conn_info;
       }
 
+      msg_desc->ptr1= msg_desc->ptr2= msg_desc->ptr3=msg->desc.utils_ptr;
    }
    while(0);
    CNTLR_RCU_READ_LOCK_RELEASE();

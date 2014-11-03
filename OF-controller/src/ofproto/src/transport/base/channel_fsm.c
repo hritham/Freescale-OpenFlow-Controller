@@ -576,7 +576,7 @@ int32_t fsm_xprt_proto_channel_detach_dp( cntlr_channel_info_t *channel,  void *
       }
       if(channel->auxiliary_id == OF_TRNSPRT_MAIN_CONN_ID)
       {
-         channel->datapath->is_main_conn_present = FALSE;
+         //channel->datapath->is_main_conn_present = FALSE;
 
          if ( channel->keep_alive_state == OF_TRNSPRT_CHN_CONN_KEEP_ALIVE_MSG_SENT)
          {
@@ -598,8 +598,9 @@ int32_t fsm_xprt_proto_channel_detach_dp( cntlr_channel_info_t *channel,  void *
                //      break;
             }
          }
-         channel->datapath->is_main_conn_present = FALSE;
-         memset(&(channel->datapath->main_channel),0,sizeof(dprm_dp_channel_entry_t));
+         /* NSM  moved the next two lines below to fix port issues in controller stop */
+         //channel->datapath->is_main_conn_present = FALSE;
+         //memset(&(channel->datapath->main_channel),0,sizeof(dprm_dp_channel_entry_t));
          inform_event_to_app(channel->datapath,
                DP_DETACH_EVENT,NULL,NULL);
          ret_val=dprm_datapath_detach_handler(channel->datapath->datapath_handle);
@@ -637,7 +638,10 @@ int32_t fsm_xprt_proto_channel_detach_dp( cntlr_channel_info_t *channel,  void *
 
          }
       }
-      channel->state = OF_TRNSPRT_CHN_CONN_ESTBD;
+      /* NSM  moved the next two lines from above to fix port deletion and flow deletion issues in controller stop */
+      channel->datapath->is_main_conn_present = FALSE;
+      memset(&(channel->datapath->main_channel),0,sizeof(dprm_dp_channel_entry_t));
+      channel->state = OF_TRNSPRT_CHN_CONN_CLOSED;
       OF_LOG_MSG(OF_LOG_XPRT_PROTO, OF_LOG_WARN,"Detaching Dp from channel");
       //  memset(channel->safe_ref,0,sizeof(cntlr_ch_safe_ref_t));
       channel->datapath=NULL; /* conn table , safe ref need to be reset */

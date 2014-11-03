@@ -444,7 +444,7 @@ of_add_port_to_dp(uint64_t datapath_handle,
    lstoffset = DPRM_NOTIFICATIONS_APP_HOOK_LISTNODE_OFFSET;
 
 
-           OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered");
+           OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Entered Port name %s",port_desc->name);
 
 
     retval = dprm_get_port_handle(datapath_handle,port_desc->name,&port_handle);
@@ -464,6 +464,7 @@ of_add_port_to_dp(uint64_t datapath_handle,
         dp_port_entry->port_id = port_desc->port_no;
         memcpy(&dp_port_entry->port_info,port_desc,sizeof(struct ofl_port_desc_info));
 
+        OF_LOG_MSG(OF_LOG_MOD, OF_LOG_DEBUG,"Port ID %d",dp_port_entry->port_id);
 
 
         /** Trigger DPRM_DATAPATH_PORT_DESC_UPDATE event .
