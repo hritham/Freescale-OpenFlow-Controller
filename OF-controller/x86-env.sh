@@ -1,7 +1,7 @@
 #!/bin/bash
 export TARGET_PLATFORM=X86
 export SRC_DIR=$PWD
-export JAVA_HOME=/projects/vortiqabuilds_nbk/SDN/jdk1.7.0_17
+export JAVA_HOME=/opt/jdk1.7.0_17
 export PATH=$PATH:$JAVA_HOME/bin
 export CLASSPATH=.:$JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar
 export TARGET_HOST=

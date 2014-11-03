@@ -20,7 +20,7 @@ struct futex
 
 #if defined(__powerpc__)
 #include "ppc.h"
-#elif defined(__i386__)
+#elif (defined(__i386__) || defined(__X86_64__))
 #include "i386.h"
 #endif
 #define FUTEX_PASSED (-(1024 * 1024 * 1024))
@@ -30,6 +30,9 @@ struct timespec;
 extern int sys_futex(int *, int, int, struct timespec *);
 extern int __futex_down_slow(struct futex *, int, struct timespec *);
 extern int __futex_up_slow(struct futex *);
+extern int __futex_down(int *counter);
+extern int __futex_up(int *c);
+extern void __futex_commit(void);
 
 static inline int futex_down_timeout(struct futex *futx, struct timespec *rel)
 {

@@ -15,8 +15,9 @@ Ex: on_director/>
         view%
         nem/ 
         namespace%
-        switch%
+        onswitch%
         domain%
+        ttp%
         datapath%
         ssl/ 
         trace/ 
@@ -37,12 +38,13 @@ on_director/domain domain-100/>commit
 Session Committed successfully.
 
 Ex:adding a datapath
-on_director/>datapath 1
+on_director/>datapath 100049f0201fd
 Entered into Add context.
-on_director/datapath 1/>set subjectname dp_1@xyz.com
-on_director/datapath 1/>set switch switch-100
-on_director/datapath 1/>set domain domain-100
-on_director/datapath 1/>commit
+on_director/datapath 100049f0201fd/>set subjectname dp_1@xyz.com
+on_director/datapath 100049f0201fd/>set onswitch switch-100
+on_director/datapath 100049f0201fd/>set domain domain-100
+on_director/datapath 100049f0201fd/>set datapathname dp1
+on_director/datapath 100049f0201fd/>commit
 Session Committed successfully.
 
 
@@ -50,10 +52,11 @@ Session Committed successfully.
 
 on_director/>show datapath 
 	{
-             datapathid : 1
+             datapathid : 100049f0201fd
              switch : switch-100
              domain : domain-100
              subjectname : dp_1@xyz.com
+	     datapathname : dp1
 
         }
 
@@ -80,3 +83,159 @@ help del
 help save
 help <directory name>
  
+9. To add a records under datapath, use the below commands,
+
+on_director/>cd datapath{100049f0201fd}
+
+To list the available tables to configure under datapath,
+on_director/>cd datapath{100049f0201fd}> ls
+	
+	meters/
+	stats/
+	groups/
+	port%
+	channels%
+	flowmod%
+
+10. To configure groups use the below commands.
+
+on_director/>cd datapath{100049f0201fd}>groups
+on_director/>cd datapath{100049f0201fd}/groups/>
+on_director/datapath{100049f0201fd}/groups/>ls
+        group% 
+        stats% 
+        features/
+
+on_director/datapath{100049f0201fd}/groups/>groupdesc 1
+
+Entered into Add context.
+on_director/datapath{100049f0201fd}/groups/group 1/>ls
+
+on_director/datapath{1231231231}/groups/groupdesc 1/>ls
+
+         Use 'set' command to configure parameters:
+         set [ParamName1 <value>]...  [ParamNameN <Value>]
+
+ Mandatory Parameter(s):
+        grouptype                               : String { all/select/indirect/ff }
+ Optional Parameter(s):
+        bucketid                                : Unsigned Integer
+        weight                                  : Unsigned Integer
+        watch_port                              : Unsigned Integer
+        watch_group                             : Unsigned Integer
+        actiontype                              : String { output/copyTTLout/copyTTLin/setMPLSTTL/decMPLSTTL/pushVLAN/popVLAN/pushMPLS/popMPLS/setQueue/applyGroup/setTTL/decTTL/setField/pushPBB/popPBB }
+        port_no                                 : String
+        max_len                                 : Unsigned Integer
+        ttl                                     : Unsigned Integer
+        ether_type                              : Unsigned Integer
+        groupid                                 : Unsigned Integer
+        queueid                                 : Unsigned Integer
+        setFieldType                            : String { inPort/inPhyPort/srcIpV4Addr/dstIpV4Addr/udpSrcPort/udpDstPort/tcpSrcPort/tcpDstPort/sctpSrcPort/sctpDstPort/protocol/icmpType/icmpCode/ethType/srcMacAddr/dstMacAddr/mplsLabel/mplsTC/mplsBos/pbbIsid/tunnelId/VlanId/VlanPriority/arpSrcIpv4Addr/arpDstIpv4Addr/arpSrcMacAddr/arpDstMacAddr/arpOpcode/IpDiffServCodePointBits/IpECNBits/srcIpv6Addr/dstIpv6Addr/Ipv6flowlabel/icmpv6Type/icmpv6Code/ipv6NDTarget/ipv6NDSrcLinkLayerAddr/ipv6NDTargetLinkLayerAddr/ipv6ExtnHdr }
+        setFieldVal                             : String
+
+        bucket%
+
+ Use below commands to save or cancel the changes:
+        commit
+        revoke
+
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set grouptype ff
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set bucketid 1
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set watch_group 11
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set actiontype output
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set port_no 11
+on_director/datapath{100049f010101}/groups/groupdesc 1/>set max_len 11
+on_director/datapath{100049f010101}/groups/groupdesc 1/>commit
+
+ Committed the configuration successfully.
+
+
+on_director/datapath{100049f010101}/groups/>
+
+
+To list the newly added group:
+
+on_director/datapath{100049f010101}/groups/>show groupdesc
+
+        {
+          group_id : 1
+          grouptype : OFPGT_FF
+          bucket_count : 1
+
+          bucketid : 1
+          bucketinfo : watch_port=0 watch_group=11
+          action_count : 1
+
+          actioninfo : Type=OFPAT_OUTPUT port=11 max_len=11
+
+        }
+
+
+
+on_director/datapath{100049f010101}/groups/>
+
+If we want to add another bucket at first position, 
+
+on_director/datapath{100049f010101}/groups/>groupdesc 1
+
+        Entered into Edit context.
+
+on_director/datapath{100049f010101}/groups/groupdesc 1/>bucket 2
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set bucketoperation insert
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set bucketposition first
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set watch_port 12
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set actiontype output
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set port_no 12
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set max_len 111
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>commit
+
+ Committed the configuration successfully.
+
+
+on_director/datapath{100049f010101}/groups/>
+
+on_director/datapath{100049f010101}/groups/>show groupdesc
+
+        {
+          group_id : 1
+          grouptype : OFPGT_FF
+          bucket_count : 2
+
+          bucketid : 2
+          bucketinfo : watch_port=0 watch_group=12
+          action_count : 1
+
+          actioninfo : Type=OFPAT_OUTPUT port=12 max_len=111
+
+          bucketid : 1
+          bucketinfo : watch_port=0 watch_group=11
+          action_count : 1
+
+          actioninfo : Type=OFPAT_OUTPUT port=11 max_len=11
+
+	}
+
+
+To remove a bucket:
+on_director/datapath{100049f010101}/groups/groupdesc 1/>bucket 2
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set bucketoperation remove
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>set bucketposition first
+on_director/datapath{100049f010101}/groups/groupdesc{1}/bucket 2/>commit
+on_director/datapath{100049f010101}/groups/>
+
+on_director/datapath{100049f010101}/groups/>show groupdesc
+
+        {
+          group_id : 1
+          grouptype : OFPGT_FF
+          bucket_count : 1
+
+          bucketid : 1
+          bucketinfo : watch_port=0 watch_group=11
+          action_count : 1
+
+          actioninfo : Type=OFPAT_OUTPUT port=11 max_len=11
+
+	}
+
+

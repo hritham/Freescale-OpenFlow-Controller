@@ -33,6 +33,13 @@
 			<a1>SAMPLE_L2_FWD_TTP</a1>			
 			<a2>l2fwd_domain@abc.com</a2>
 		</row>
+                <row>
+			<a0>EXT_427_DOMAIN</a0>
+			<a1>PKTOUT_PIPELINE_FIELD_EXT_TTP</a1>			
+			<a2>ext727_domain@abc.com</a2>
+		</row>
+
+
 
 </body>
 </configuration>
